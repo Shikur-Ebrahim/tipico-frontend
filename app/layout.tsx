@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import { Geist, Geist_Mono } from 'next/font/google';
-import { SITE_DESCRIPTION, SITE_NAME, SITE_URL } from '@/lib/site-metadata';
+import { SITE_DESCRIPTION, SITE_LOGO_PATH, SITE_NAME, SITE_URL } from '@/lib/site-metadata';
 import './globals.css';
 
 const geistSans = Geist({
@@ -30,9 +30,9 @@ export const metadata: Metadata = {
     'Ethiopia betting',
   ],
   icons: {
-    icon: [{ url: '/icon.svg', type: 'image/svg+xml' }],
-    shortcut: '/icon.svg',
-    apple: '/apple-touch-icon.png',
+    icon: [{ url: SITE_LOGO_PATH, type: 'image/jpeg' }],
+    shortcut: SITE_LOGO_PATH,
+    apple: SITE_LOGO_PATH,
   },
   openGraph: {
     type: 'website',
@@ -43,18 +43,16 @@ export const metadata: Metadata = {
     description: SITE_DESCRIPTION,
     images: [
       {
-        url: '/og-image.png',
-        width: 1200,
-        height: 630,
+        url: SITE_LOGO_PATH,
         alt: SITE_NAME,
       },
     ],
   },
   twitter: {
-    card: 'summary_large_image',
+    card: 'summary',
     title: SITE_NAME,
     description: SITE_DESCRIPTION,
-    images: ['/og-image.png'],
+    images: [SITE_LOGO_PATH],
   },
 };
 

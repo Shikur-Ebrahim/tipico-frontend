@@ -6,3 +6,6 @@ export const SITE_NAME = 'Tipico Betting';
 
 export const SITE_DESCRIPTION =
   'Tipico Betting — one of the world’s most trusted sports betting platforms. Live football odds, secure deposits, and fast withdrawals.';
+
+/** Official Tipico brand logo (public/logo.jpg). */
+export const SITE_LOGO_PATH = '/logo.jpg';
