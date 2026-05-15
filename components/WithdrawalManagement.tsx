@@ -96,21 +96,33 @@ export default function WithdrawalManagement({ onClose }: WithdrawalManagementPr
       return;
     }
 
+    const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME || '';
+    const uploadPreset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET || '';
+    if (!cloudName || !uploadPreset) {
+      setError('Cloudinary is not configured. Set NEXT_PUBLIC_CLOUDINARY_* on Render/Vercel.');
+      return;
+    }
+
     setUploading(true);
 
     try {
-      // 1. Upload to Cloudinary
+
       const formData = new FormData();
       formData.append('file', logo);
-      formData.append('upload_preset', 'pioneerbusiness');
+      formData.append('upload_preset', uploadPreset);
 
       const cloudRes = await fetch(
-        `https://api.cloudinary.com/v1_1/dk07dayip/image/upload`,
+        `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`,
         { method: 'POST', body: formData }
       );
-      
+
       const cloudData = await cloudRes.json();
-      if (!cloudData.secure_url) throw new Error('Upload failed');
+      if (!cloudRes.ok) {
+        throw new Error(cloudData.error?.message || cloudData.error || 'Cloudinary upload failed');
+      }
+      if (!cloudData.secure_url) {
+        throw new Error(cloudData.error?.message || 'Cloudinary upload failed (no image URL)');
+      }
 
       // 2. Save to Backend
       const response = await fetch(`${API_BASE}/admin/withdrawal-methods`, {
@@ -137,7 +149,7 @@ export default function WithdrawalManagement({ onClose }: WithdrawalManagementPr
       }
     } catch (error) {
       console.error('Submit failed:', error);
-      setError('Connection error. Please try again.');
+      setError(error instanceof Error ? error.message : 'Connection error. Please try again.');
     } finally {
       setUploading(false);
     }
