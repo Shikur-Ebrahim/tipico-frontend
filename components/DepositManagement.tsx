@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 
 import { getPublicApiBaseUrl } from '@/lib/public-api-url';
+import { uploadImageToCloudinary } from '@/lib/cloudinary-upload';
 
 const API_BASE = getPublicApiBaseUrl();
 
@@ -72,25 +73,8 @@ export default function DepositManagement({ onClose }: DepositManagementProps) {
     try {
       let finalLogoUrl = previewUrl;
 
-      // 1. Upload to Cloudinary if a new file is selected
       if (logo) {
-        const formData = new FormData();
-        formData.append('file', logo);
-        formData.append('upload_preset', process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET || '');
-
-        const cloudRes = await fetch(
-          `https://api.cloudinary.com/v1_1/${process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME}/image/upload`,
-          { method: 'POST', body: formData }
-        );
-        
-        const cloudData = await cloudRes.json();
-        if (!cloudRes.ok) {
-          throw new Error(cloudData.error?.message || cloudData.error || 'Cloudinary upload failed');
-        }
-        if (!cloudData.secure_url) {
-          throw new Error(cloudData.error?.message || 'Cloudinary upload failed (no image URL)');
-        }
-        finalLogoUrl = cloudData.secure_url;
+        finalLogoUrl = await uploadImageToCloudinary(logo);
       }
 
       // 2. Save to Backend

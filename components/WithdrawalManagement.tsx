@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 
 import { getPublicApiBaseUrl } from '@/lib/public-api-url';
+import { uploadImageToCloudinary } from '@/lib/cloudinary-upload';
 
 const API_BASE = getPublicApiBaseUrl();
 
@@ -12,42 +13,45 @@ type WithdrawalMethod = {
 };
 
 const ETHIOPIAN_BANKS = [
-  "Commercial Bank of Ethiopia",
-  "Development Bank",
-  "Dashan Bank",
-  "Bank of Abissinaiya",
-  "Awash Bank",
-  "Wegagen Bank",
-  "Nib Bank",
-  "United Bank",
-  "Bank of Oromia",
-  "Zemen Bank",
-  "Buna Bank",
-  "Abay Bank",
-  "Amhara Bank"
+  'Commercial Bank of Ethiopia',
+  'Development Bank',
+  'Dashan Bank',
+  'Bank of Abissinaiya',
+  'Awash Bank',
+  'Wegagen Bank',
+  'Nib Bank',
+  'United Bank',
+  'Bank of Oromia',
+  'Zemen Bank',
+  'Buna Bank',
+  'Abay Bank',
+  'Amhara Bank',
 ];
 
-const WALLETS = [
-  "telebirr",
-  "CBE birr",
-  "Amole",
-  "Mpesa"
-];
+const WALLETS = ['telebirr', 'CBE birr', 'Amole', 'Mpesa'];
 
 type WithdrawalManagementProps = {
   onClose: () => void;
 };
 
+async function parseJsonResponse(response: Response): Promise<{ message?: string }> {
+  try {
+    return await response.json();
+  } catch {
+    return {};
+  }
+}
+
 export default function WithdrawalManagement({ onClose }: WithdrawalManagementProps) {
   const [methods, setMethods] = useState<WithdrawalMethod[]>([]);
   const [type, setType] = useState<'bank' | 'wallet'>('bank');
   const [selectedName, setSelectedName] = useState(ETHIOPIAN_BANKS[0]);
-  
+
   const [logo, setLogo] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState('');
 
   useEffect(() => {
     fetchMethods();
@@ -60,7 +64,7 @@ export default function WithdrawalManagement({ onClose }: WithdrawalManagementPr
   const fetchMethods = async () => {
     try {
       const response = await fetch(`${API_BASE}/admin/withdrawal-methods`);
-      if (!response.ok) throw new Error('Failed to fetch');
+      if (!response.ok) throw new Error('Failed to fetch withdrawal methods');
       const data = await response.json();
       setMethods(Array.isArray(data) ? data : []);
     } catch (error) {
@@ -76,220 +80,253 @@ export default function WithdrawalManagement({ onClose }: WithdrawalManagementPr
     if (file) {
       setLogo(file);
       setPreviewUrl(URL.createObjectURL(file));
-      setError(null);
+      setMessage('');
     }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
+    setMessage('');
 
-    // Frontend Duplicate Check
-    const isDuplicate = methods.some(m => m.name === selectedName);
+    const token = localStorage.getItem('token');
+    if (!token) {
+      setMessage('Error: Admin session expired. Please log in again.');
+      return;
+    }
+
+    const isDuplicate = methods.some((m) => m.name === selectedName);
     if (isDuplicate) {
-      setError(`${selectedName} is already added!`);
+      setMessage(`Error: ${selectedName} is already added`);
       return;
     }
 
     if (!logo) {
-      setError('Please select a logo first');
-      return;
-    }
-
-    const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME || '';
-    const uploadPreset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET || '';
-    if (!cloudName || !uploadPreset) {
-      setError('Cloudinary is not configured. Set NEXT_PUBLIC_CLOUDINARY_* on Render/Vercel.');
+      setMessage('Please select a logo first.');
       return;
     }
 
     setUploading(true);
+    setMessage('Uploading logo...');
 
     try {
+      const logoUrl = await uploadImageToCloudinary(logo);
 
-      const formData = new FormData();
-      formData.append('file', logo);
-      formData.append('upload_preset', uploadPreset);
+      setMessage('Saving method...');
 
-      const cloudRes = await fetch(
-        `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`,
-        { method: 'POST', body: formData }
-      );
-
-      const cloudData = await cloudRes.json();
-      if (!cloudRes.ok) {
-        throw new Error(cloudData.error?.message || cloudData.error || 'Cloudinary upload failed');
-      }
-      if (!cloudData.secure_url) {
-        throw new Error(cloudData.error?.message || 'Cloudinary upload failed (no image URL)');
-      }
-
-      // 2. Save to Backend
       const response = await fetch(`${API_BASE}/admin/withdrawal-methods`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
+          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
           name: selectedName,
           type,
-          logoUrl: cloudData.secure_url
-        })
+          logoUrl,
+        }),
       });
 
-      const data = await response.json();
+      const data = await parseJsonResponse(response);
 
       if (response.ok) {
-        fetchMethods();
+        setMessage('Added successfully!');
+        await fetchMethods();
         setLogo(null);
         setPreviewUrl(null);
       } else {
-        setError(data.message || 'Failed to add method');
+        setMessage(`Error: ${data.message || 'Failed to add method'}`);
       }
     } catch (error) {
       console.error('Submit failed:', error);
-      setError(error instanceof Error ? error.message : 'Connection error. Please try again.');
+      setMessage(`Error: ${error instanceof Error ? error.message : 'Failed to save'}`);
     } finally {
       setUploading(false);
     }
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm('Are you sure?')) return;
+    if (!confirm('Are you sure you want to delete this method?')) return;
+
+    const token = localStorage.getItem('token');
+    if (!token) {
+      setMessage('Error: Admin session expired. Please log in again.');
+      return;
+    }
+
     try {
       const response = await fetch(`${API_BASE}/admin/withdrawal-methods/${id}`, {
         method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+        headers: { Authorization: `Bearer ${token}` },
       });
 
       if (response.ok) {
-        setMethods(methods.filter(m => m.id !== id));
+        setMethods(methods.filter((m) => m.id !== id));
+      } else {
+        const data = await parseJsonResponse(response);
+        setMessage(`Error: ${data.message || 'Failed to delete method'}`);
       }
     } catch (error) {
       console.error('Delete failed:', error);
+      setMessage(`Error: ${error instanceof Error ? error.message : 'Failed to delete'}`);
     }
   };
 
+  const messageIsError = message.startsWith('Error');
+
   return (
-    <div className="fixed inset-0 z-[160] bg-[#F8FAFC] text-[#1A202C] flex flex-col h-screen overflow-hidden">
+    <div className="fixed inset-0 z-[160] bg-white text-[#1A202C] flex flex-col h-screen overflow-hidden">
       <header className="bg-white px-6 py-5 flex items-center justify-between shrink-0 border-b border-[#F1F5F9]">
         <div className="flex items-center gap-4">
-          <button onClick={onClose} className="w-10 h-10 flex items-center justify-center bg-gray-50 text-gray-500 rounded-full transition-all active:scale-90">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+          <button
+            onClick={onClose}
+            className="p-2 -ml-2 hover:bg-gray-100 rounded-full transition-colors"
+          >
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <path d="M19 12H5M12 19l-7-7 7-7" />
+            </svg>
           </button>
-          <div className="text-xl font-black text-[#1A202C] tracking-tighter">Withdrawal M</div>
+          <div className="text-xl font-black text-[#1A202C] tracking-tight">Withdrawal Methods</div>
         </div>
       </header>
 
-      <main className="flex-1 overflow-y-auto p-4 pb-24 space-y-6">
-        <section className="bg-white rounded-[32px] p-6 shadow-sm border border-gray-100">
-          <h2 className="text-lg font-black text-gray-900 mb-6">Add withdrawal method</h2>
-          <form onSubmit={handleSubmit} className="space-y-5">
-            <div className="flex p-1 bg-gray-50 rounded-2xl">
-              <button
-                type="button"
-                onClick={() => setType('bank')}
-                className={`flex-1 py-3 rounded-xl font-black text-xs transition-all ${type === 'bank' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-400'}`}
-              >
-                Banks
-              </button>
-              <button
-                type="button"
-                onClick={() => setType('wallet')}
-                className={`flex-1 py-3 rounded-xl font-black text-xs transition-all ${type === 'wallet' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-400'}`}
-              >
-                Wallets
-              </button>
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-[10px] font-black text-gray-400 ml-1">Select {type}</label>
-              <select
-                value={selectedName}
-                onChange={(e) => {
-                  setSelectedName(e.target.value);
-                  setError(null);
-                }}
-                className="w-full bg-[#F8FAFC] border-2 border-transparent rounded-2xl px-5 py-4 font-bold text-gray-900 focus:bg-white focus:border-gray-200 outline-none transition-all appearance-none"
-              >
-                {(type === 'bank' ? ETHIOPIAN_BANKS : WALLETS).map(name => (
-                  <option key={name} value={name}>{name}</option>
-                ))}
-              </select>
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-[10px] font-black text-gray-400 ml-1">Provider logo</label>
-              <div className="relative group">
-                <input 
-                  type="file" 
-                  accept="image/*"
-                  onChange={handleFileChange}
-                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-                />
-                <div className="w-full bg-[#F8FAFC] border-2 border-dashed border-gray-200 rounded-2xl p-8 flex flex-col items-center justify-center gap-3 transition-all">
-                  {previewUrl ? (
-                    <div className="relative w-20 h-20 bg-white rounded-xl shadow-md p-2 border border-gray-100">
-                      <img src={previewUrl} className="w-full h-full object-contain" alt="Preview" />
-                    </div>
-                  ) : (
-                    <div className="w-12 h-12 bg-white rounded-xl shadow-sm flex items-center justify-center text-gray-400">
-                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                    </div>
-                  )}
-                  <div className="text-[10px] font-black text-gray-400">{logo ? logo.name : 'Click to select logo'}</div>
-                </div>
-              </div>
-            </div>
-
-            {error && (
-              <div className="p-4 bg-red-50 text-red-500 rounded-2xl text-[10px] font-black uppercase tracking-widest text-center animate-in fade-in zoom-in-95 duration-200">
-                {error}
-              </div>
-            )}
-
+      <main className="flex-1 overflow-y-auto p-6">
+        <form onSubmit={handleSubmit} className="max-w-md mx-auto space-y-6">
+          <div className="flex p-1 bg-[#F8FAFC] rounded-2xl border border-[#E2E8F0]">
             <button
-              type="submit"
-              disabled={uploading}
-              className="w-full py-5 bg-gray-900 text-white rounded-[24px] font-black text-xs active:scale-95 transition-all shadow-xl shadow-gray-100 disabled:bg-gray-400"
+              type="button"
+              onClick={() => setType('bank')}
+              className={`flex-1 py-3 rounded-xl font-black text-xs transition-all ${
+                type === 'bank' ? 'bg-white text-[#1A202C] shadow-sm' : 'text-[#64748B]'
+              }`}
             >
-              {uploading ? 'Processing...' : 'Add withdrawal method'}
+              Banks
             </button>
-          </form>
-        </section>
-
-        <section className="space-y-4">
-          <h2 className="text-lg font-black text-gray-900 ml-2">Active methods</h2>
-          <div className="grid grid-cols-1 gap-3">
-            {loading ? (
-              <div className="py-10 flex justify-center"><div className="w-8 h-8 border-4 border-gray-200 border-t-gray-900 rounded-full animate-spin"></div></div>
-            ) : methods.length === 0 ? (
-              <div className="p-10 text-center bg-white rounded-[32px] border border-dashed border-gray-200">
-                <div className="text-xs font-black text-gray-400">No methods found</div>
-              </div>
-            ) : (
-              methods.map((method) => (
-                <div key={method.id} className="bg-white rounded-[28px] p-5 shadow-sm border border-gray-100 flex items-center justify-between group animate-in zoom-in-95 duration-200">
-                  <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 bg-gray-50 rounded-2xl flex items-center justify-center p-2">
-                      <img src={method.logo_url} alt={method.name} className="w-full h-full object-contain" />
-                    </div>
-                    <div>
-                      <div className="font-black text-gray-900 text-sm tracking-tight">{method.name}</div>
-                      <div className="text-[10px] font-black text-gray-400 capitalize">{method.type}</div>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => handleDelete(method.id)}
-                    className="w-10 h-10 flex items-center justify-center text-red-500 hover:bg-red-50 rounded-full transition-all"
-                  >
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6"/></svg>
-                  </button>
-                </div>
-              ))
-            )}
+            <button
+              type="button"
+              onClick={() => setType('wallet')}
+              className={`flex-1 py-3 rounded-xl font-black text-xs transition-all ${
+                type === 'wallet' ? 'bg-white text-[#1A202C] shadow-sm' : 'text-[#64748B]'
+              }`}
+            >
+              Wallets
+            </button>
           </div>
+
+          <div className="space-y-2">
+            <label className="text-[10px] font-black uppercase tracking-widest text-[#64748B]">
+              Select {type}
+            </label>
+            <select
+              value={selectedName}
+              onChange={(e) => {
+                setSelectedName(e.target.value);
+                setMessage('');
+              }}
+              className="w-full bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl px-4 py-3.5 text-sm font-bold focus:border-[#FF8C00] outline-none transition-all"
+            >
+              {(type === 'bank' ? ETHIOPIAN_BANKS : WALLETS).map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-[10px] font-black uppercase tracking-widest text-[#64748B]">
+              Bank/Provider Logo
+            </label>
+            <div className="relative group">
+              <input
+                type="file"
+                accept="image/*"
+                onChange={handleFileChange}
+                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                required
+              />
+              <div className="w-full bg-[#F8FAFC] border-2 border-dashed border-[#E2E8F0] rounded-2xl p-8 flex flex-col items-center justify-center gap-3 group-hover:border-[#FF8C00]/30 transition-all">
+                {previewUrl ? (
+                  <div className="relative w-24 h-24 bg-white rounded-xl shadow-md p-2 border border-[#E2E8F0]">
+                    <img src={previewUrl} className="w-full h-full object-contain" alt="Preview" />
+                  </div>
+                ) : (
+                  <div className="w-12 h-12 bg-white rounded-xl shadow-sm flex items-center justify-center text-[#64748B]">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                      <polyline points="17 8 12 3 7 8" />
+                      <line x1="12" y1="3" x2="12" y2="15" />
+                    </svg>
+                  </div>
+                )}
+                <div className="text-xs font-black text-[#1A202C]">
+                  {logo ? logo.name : 'Click to upload logo'}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <button
+            type="submit"
+            disabled={uploading}
+            className={`w-full py-4 rounded-2xl font-black text-sm uppercase tracking-widest shadow-lg transition-all active:scale-95 ${
+              uploading ? 'bg-gray-400 cursor-not-allowed' : 'bg-[#FF8C00] hover:bg-[#E67E00] text-white'
+            }`}
+          >
+            {uploading ? 'Processing...' : 'Save Method'}
+          </button>
+
+          {message && (
+            <div
+              className={`p-4 rounded-xl text-center text-xs font-black uppercase tracking-tight ${
+                messageIsError ? 'bg-red-50 text-red-500' : 'bg-green-50 text-green-600'
+              }`}
+            >
+              {message}
+            </div>
+          )}
+        </form>
+
+        <section className="max-w-md mx-auto mt-10 space-y-4">
+          <h2 className="text-[10px] font-black uppercase tracking-widest text-[#64748B]">Active methods</h2>
+          {loading ? (
+            <div className="py-10 flex justify-center">
+              <div className="w-8 h-8 border-4 border-[#E2E8F0] border-t-[#FF8C00] rounded-full animate-spin" />
+            </div>
+          ) : methods.length === 0 ? (
+            <div className="text-center py-12 text-[#64748B]">
+              <div className="text-sm font-bold italic uppercase tracking-widest opacity-30">No methods found</div>
+            </div>
+          ) : (
+            methods.map((method) => (
+              <div
+                key={method.id}
+                className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-2xl p-4 flex items-center justify-between"
+              >
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 bg-white rounded-xl border border-[#E2E8F0] p-1.5 shadow-sm">
+                    <img src={method.logo_url} alt={method.name} className="w-full h-full object-contain" />
+                  </div>
+                  <div>
+                    <div className="text-sm font-black text-[#1A202C] uppercase tracking-tight">
+                      {method.name}
+                    </div>
+                    <div className="text-[10px] text-[#64748B] font-bold capitalize">{method.type}</div>
+                  </div>
+                </div>
+                <button
+                  onClick={() => handleDelete(method.id)}
+                  className="p-2.5 bg-white border border-[#E2E8F0] rounded-xl hover:bg-red-50 hover:border-red-200 text-[#475569] hover:text-red-600 transition-all shadow-sm"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <polyline points="3 6 5 6 21 6" />
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                    <line x1="10" y1="11" x2="10" y2="17" />
+                    <line x1="14" y1="11" x2="14" y2="17" />
+                  </svg>
+                </button>
+              </div>
+            ))
+          )}
         </section>
       </main>
     </div>
