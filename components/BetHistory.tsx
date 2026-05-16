@@ -15,6 +15,7 @@ type BetSelection = {
   away_logo: string;
   league_name: string;
   market_name: string;
+  kickoff_at?: string | null;
 };
 
 type BetSlip = {
@@ -59,6 +60,18 @@ function legResultLabel(result: string | null | undefined): string | null {
   if (r === 'won') return 'Won';
   if (r === 'lost') return 'Lost';
   return null;
+}
+
+function formatKickoffAt(value: string | null | undefined): string | null {
+  if (value == null || String(value).trim() === '') return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return new Intl.DateTimeFormat('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(d);
 }
 
 function ticketCodePlain(code: string | null | undefined): string {
@@ -321,6 +334,7 @@ export default function BetHistory({ isOpen, onClose, user }: BetHistoryProps) {
                       const legWon = lr === 'won';
                       const legLost = lr === 'lost';
                       const legBadge = legResultLabel(sel.result);
+                      const kickoffLabel = formatKickoffAt(sel.kickoff_at);
 
                       return (
                         <div
@@ -368,6 +382,9 @@ export default function BetHistory({ isOpen, onClose, user }: BetHistoryProps) {
                               ) : (
                                 <span className="text-[10px] font-medium text-slate-400">Pending</span>
                               )}
+                              {kickoffLabel ? (
+                                <span className="text-[10px] font-medium tabular-nums text-slate-400">{kickoffLabel}</span>
+                              ) : null}
                             </div>
                           </div>
                           <p className="mt-2 text-xs text-slate-500">

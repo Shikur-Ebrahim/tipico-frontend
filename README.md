@@ -1,22 +1,13 @@
 # tipico-frontend
 
-Next.js app for the Tipico betting UI. All data comes from the **backend API** (not API-Football from the browser).
-
-## Local development
-
-```bash
-npm install
-cp .env.example .env.local
-# Edit .env.local — set NEXT_PUBLIC_API_URL to your API (e.g. http://localhost:4000/api or Render)
-npm run dev
-```
+Next.js app for the Tipico betting UI. All data comes from the **backend API on Render** (not API-Football from the browser).
 
 ## Deploy on Vercel (from GitHub)
 
 1. Push this repo to GitHub.
-2. [Vercel](https://vercel.com) → **Add New** → **Project** → import **`Shikur-Ebrahim/tipico-frontend`** (or your fork).
-3. **Framework preset:** Next.js (auto). **Root directory:** leave default (repo root).
-4. **Environment variables** (Production + Preview):
+2. [Vercel](https://vercel.com) → **Add New** → **Project** → import your repository.
+3. **Framework preset:** Next.js (auto). **Root directory:** repo root for this app.
+4. **Environment variables** (Production + Preview) — required for build and runtime:
 
    | Name | Example |
    |------|---------|
@@ -26,7 +17,7 @@ npm run dev
 
 5. **Deploy.** After the first deploy, any env change needs **Redeploy**.
 
-**CORS:** The backend must allow your Vercel origin (this project’s API uses open `cors()` by default).
+**CORS:** The Render API uses open `cors()` by default, so Vercel origins are allowed.
 
 ## Build
 
@@ -34,4 +25,4 @@ npm run dev
 npm run build
 ```
 
-Requires **Node 20+** (matches Vercel default).
+Requires **Node 20+** and **`NEXT_PUBLIC_API_URL`** set (same value as on Vercel).
