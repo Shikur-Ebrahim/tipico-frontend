@@ -156,12 +156,6 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
   }, [isOpen, user?.id, fetchMethods, loadUserWithdrawalState]);
 
   const handleMethodSelect = (method: WithdrawalMethod) => {
-    if (!depositEligible) {
-      setError(
-        `To withdraw in Tipico betting, your total approved deposits must reach ${minDepositRequired} ETB. You have deposited ${totalDeposits.toFixed(2)} ETB so far.`
-      );
-      return;
-    }
     const val = parseFloat(amount);
     if (!Number.isFinite(val) || val < MIN_WITHDRAW) {
       setError(`Enter at least ${MIN_WITHDRAW} ETB`);
@@ -178,6 +172,10 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!depositEligible) {
+      setError(null);
+      return;
+    }
     if (!accountName?.trim() || !accountDetails?.trim()) {
       setError('Please fill all details');
       return;
@@ -246,13 +244,6 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
       </header>
 
       <main className="mx-auto flex min-h-0 w-full max-w-md flex-1 flex-col overflow-y-auto overscroll-contain px-4 py-4 pb-28 sm:px-5">
-            {!hasPending && !depositEligible ? (
-              <WithdrawalDepositRuleBanner
-                minDepositRequired={minDepositRequired}
-                totalDeposits={totalDeposits}
-              />
-            ) : null}
-
             {hasPending && (
               <div className="mb-4 rounded-2xl border-2 border-amber-200 bg-amber-50 p-4 shadow-sm">
                 <div className="flex items-start gap-3">
@@ -272,7 +263,7 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
               </div>
             )}
 
-            {step === 'selection' && !hasPending && depositEligible && (
+            {step === 'selection' && !hasPending && (
               <div className="space-y-6 animate-in fade-in duration-300">
                 <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                   <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Available</p>
@@ -334,7 +325,7 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
               </div>
             )}
 
-            {step === 'details' && selectedMethod && !hasPending && depositEligible && (
+            {step === 'details' && selectedMethod && !hasPending && (
               <form onSubmit={handleSubmit} className="space-y-6 animate-in slide-in-from-right duration-300">
                 <div className="flex items-center gap-4 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-100">
                   <div className="h-12 w-12 rounded-xl bg-[#F8FAFC] p-2 shadow-inner">
@@ -376,14 +367,21 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
                   </div>
                 </div>
 
-                {error && (
+                {!depositEligible && (
+                  <WithdrawalDepositRuleBanner
+                    minDepositRequired={minDepositRequired}
+                    totalDeposits={totalDeposits}
+                  />
+                )}
+
+                {error && depositEligible && (
                   <div className="rounded-[18px] bg-red-50 p-4 text-center text-[10px] font-black text-red-500">{error}</div>
                 )}
 
                 <div className="space-y-3">
                   <button
                     type="submit"
-                    disabled={loading}
+                    disabled={loading || !depositEligible}
                     className="w-full rounded-[24px] bg-[#1A202C] py-5 text-sm font-black text-white shadow-xl shadow-gray-100 transition-all active:scale-95 disabled:bg-gray-300"
                   >
                     {loading ? 'Submitting…' : 'Withdraw'}

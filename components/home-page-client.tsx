@@ -21,10 +21,19 @@ import {
 } from '../lib/home-fixture-list';
 import { isMatchClosedForBetting } from '../lib/match-status';
 import {
+  consumeHomeFeedPrefetch,
+  peekHomeBootstrap,
+  startHomeFeedPrefetch,
+} from '../lib/home-bootstrap';
+import {
   homeFeedCacheKey,
   peekHomeFeedCache,
   writeHomeFeedCache,
 } from '../lib/home-feed-cache';
+
+if (typeof window !== 'undefined') {
+  startHomeFeedPrefetch();
+}
 import BetSlipDrawer from './BetSlipDrawer';
 import { useBetSlip } from '../lib/betslip';
 import AuthModal from './auth-modal';
@@ -179,12 +188,27 @@ export default function HomePageClient({
   featuredMatches: _initialFeaturedMatches,
 }: HomePageClientProps) {
   const [liveMatches, setLiveMatches] = useState<LiveMatch[]>(initialLiveMatches);
-  const [upcomingFixtures, setUpcomingFixtures] = useState<Fixture[]>(initialUpcomingFixtures);
-  const [fixtureMeta, setFixtureMeta] = useState<FixtureMeta | null>(initialFixtureMeta);
+  const [upcomingFixtures, setUpcomingFixtures] = useState<Fixture[]>(() => {
+    if (initialUpcomingFixtures.length > 0) return initialUpcomingFixtures;
+    if (typeof window !== 'undefined') {
+      const boot = peekHomeBootstrap();
+      if (boot?.fixtures.length) return boot.fixtures;
+    }
+    return [];
+  });
+  const [fixtureMeta, setFixtureMeta] = useState<FixtureMeta | null>(() => {
+    if (initialFixtureMeta) return initialFixtureMeta;
+    if (typeof window !== 'undefined') return peekHomeBootstrap()?.meta ?? null;
+    return null;
+  });
   const [topLeagues, setTopLeagues] = useState<League[]>(initialTopLeagues);
-  const [oddsMap, setOddsMap] = useState<Record<number, Odd[]>>(initialOddsMap);
-  const [isInitialLoading, setIsInitialLoading] = useState(
-    () => initialUpcomingFixtures.length === 0
+  const [oddsMap, setOddsMap] = useState<Record<number, Odd[]>>(() => {
+    if (Object.keys(initialOddsMap).length > 0) return initialOddsMap;
+    if (typeof window !== 'undefined') return peekHomeBootstrap()?.odds ?? {};
+    return {};
+  });
+  const [listFetchSettled, setListFetchSettled] = useState(
+    () => initialUpcomingFixtures.length > 0
   );
   const filterCacheKey = (
     day: string,
@@ -615,7 +639,7 @@ export default function HomePageClient({
         else apply();
       } finally {
         if (gen === fixtureFetchGenRef.current) {
-          setIsInitialLoading(false);
+          setListFetchSettled(true);
         }
       }
     },
@@ -629,13 +653,35 @@ export default function HomePageClient({
       setUpcomingFixtures(cached.fixtures);
       setOddsMap((prev) => ({ ...prev, ...cached.odds }));
       if (cached.meta) setFixtureMeta(cached.meta);
-      setIsInitialLoading(false);
+      setListFetchSettled(true);
       return true;
     },
     []
   );
 
+  const applyBootstrapSnapshot = useCallback(
+    (fixtures: Fixture[], odds: Record<number, Odd[]>, meta: FixtureMeta | null) => {
+      if (fixtures.length > 0) {
+        setUpcomingFixtures(fixtures);
+        if (Object.keys(odds).length > 0) {
+          setOddsMap((prev) => ({ ...prev, ...odds }));
+        }
+        if (meta) setFixtureMeta(meta);
+        writeHomeFeedCache(
+          filterCacheKey('all', 'All countries', null),
+          fixtures,
+          odds,
+          meta
+        );
+      }
+      setListFetchSettled(true);
+    },
+    []
+  );
+
   useLayoutEffect(() => {
+    startHomeFeedPrefetch();
+
     if (initialUpcomingFixtures.length > 0) {
       writeHomeFeedCache(
         filterCacheKey('all', 'All countries', null),
@@ -643,30 +689,54 @@ export default function HomePageClient({
         initialOddsMap,
         initialFixtureMeta
       );
+      setListFetchSettled(true);
+      void loadFixtureList({ background: true });
       return;
     }
+
+    if (upcomingFixtures.length > 0) {
+      setListFetchSettled(true);
+      void loadFixtureList({ background: true });
+      return;
+    }
+
+    const boot = peekHomeBootstrap();
+    if (boot?.fixtures.length) {
+      applyBootstrapSnapshot(boot.fixtures, boot.odds, boot.meta);
+      void loadFixtureList({ background: true });
+      return;
+    }
+
     hydrateFromCache(selectedDay, selectedCountry, selectedLeagueId);
+
+    const pending = consumeHomeFeedPrefetch();
+    if (pending) {
+      void pending.then((snap) => {
+        applyBootstrapSnapshot(snap.fixtures, snap.odds, snap.meta);
+        void loadFixtureList({ background: true });
+      });
+      return;
+    }
+
+    void loadFixtureList().finally(() => setListFetchSettled(true));
   }, []);
 
   useEffect(() => {
+    if (selectedDay === 'all' && selectedCountry === 'All countries' && selectedLeagueId === null) {
+      return;
+    }
     const cacheKey = filterCacheKey(selectedDay, selectedCountry, selectedLeagueId);
     const cached = peekHomeFeedCache(cacheKey);
     if (cached?.fixtures.length) {
       setUpcomingFixtures(cached.fixtures);
       setOddsMap((prev) => ({ ...prev, ...cached.odds }));
       if (cached.meta) setFixtureMeta(cached.meta);
-      setIsInitialLoading(false);
+      setListFetchSettled(true);
       void loadFixtureList({ background: true });
       return;
     }
-    if (upcomingFixtures.length > 0) {
-      setIsInitialLoading(false);
-      void loadFixtureList({ background: true });
-      return;
-    }
-    setIsInitialLoading(true);
-    void loadFixtureList();
-  }, [loadFixtureList, selectedDay, selectedCountry, selectedLeagueId]);
+    void loadFixtureList().finally(() => setListFetchSettled(true));
+  }, [selectedDay, selectedCountry, selectedLeagueId, loadFixtureList]);
 
   /** Load remaining rows for this filter so "See more" only reveals +50 locally. */
   useEffect(() => {
@@ -684,12 +754,6 @@ export default function HomePageClient({
     selectedLeagueId,
     loadFixtureList,
   ]);
-
-  useEffect(() => {
-    if (!isInitialLoading) return;
-    const safety = window.setTimeout(() => setIsInitialLoading(false), 50_000);
-    return () => window.clearTimeout(safety);
-  }, [isInitialLoading]);
 
   useEffect(() => {
     let cancelled = false;
@@ -981,13 +1045,14 @@ export default function HomePageClient({
         setUpcomingFixtures(cached.fixtures);
         setOddsMap((prev) => ({ ...prev, ...cached.odds }));
         if (cached.meta) setFixtureMeta(cached.meta);
-        setIsInitialLoading(false);
+        setListFetchSettled(true);
       } else {
         setUpcomingFixtures([]);
-        setIsInitialLoading(true);
+        setListFetchSettled(false);
+        void loadFixtureList().finally(() => setListFetchSettled(true));
       }
     });
-  }, []);
+  }, [loadFixtureList]);
 
   const selectCountry = useCallback((name: string) => {
     const cached = peekHomeFeedCache(
@@ -1001,13 +1066,14 @@ export default function HomePageClient({
         setUpcomingFixtures(cached.fixtures);
         setOddsMap((prev) => ({ ...prev, ...cached.odds }));
         if (cached.meta) setFixtureMeta(cached.meta);
-        setIsInitialLoading(false);
+        setListFetchSettled(true);
       } else {
         setUpcomingFixtures([]);
-        setIsInitialLoading(true);
+        setListFetchSettled(false);
+        void loadFixtureList().finally(() => setListFetchSettled(true));
       }
     });
-  }, [selectedDay]);
+  }, [selectedDay, loadFixtureList]);
 
   return (
     <div className="site-shell overflow-x-hidden bg-[#0D1117] min-h-screen text-white pb-[70px]">
@@ -1405,13 +1471,8 @@ export default function HomePageClient({
              </button>
            </div>
          )}
-         <section className="space-y-4 pb-4">
-            {isInitialLoading && groupedMatches.length === 0 ? (
-              <div className="site-card rounded-xl p-10 text-center border border-[#E2E8F0]">
-                <div className="mx-auto h-9 w-9 animate-spin rounded-full border-2 border-[#E2E8F0] border-t-[#FF8C00]" />
-                <p className="mt-4 text-sm font-semibold text-[#1A202C]">Loading matches with odds…</p>
-              </div>
-            ) : groupedMatches.length > 0 ? groupedMatches.map(([leagueName, matches]) => {
+         <section className="space-y-4 pb-4" suppressHydrationWarning>
+            {groupedMatches.length > 0 ? groupedMatches.map(([leagueName, matches]) => {
               const isCollapsed = collapsedLeagues.has(leagueName);
               const firstFixture = matches[0];
               const leagueIcon = firstFixture.league_logo || firstFixture.flag_url;
@@ -1608,7 +1669,7 @@ export default function HomePageClient({
                   )}
                 </div>
               );
-            }) : !isInitialLoading && upcomingFixtures.length === 0 ? (
+            }) : listFetchSettled && upcomingFixtures.length === 0 ? (
              <div className="site-card rounded-xl p-8 text-center flex flex-col items-center justify-center border border-[#30363D]">
                <div className="w-12 h-12 rounded-full bg-[#21262D] flex items-center justify-center mb-3">
                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#8B949E" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>

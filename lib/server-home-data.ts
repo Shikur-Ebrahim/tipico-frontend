@@ -22,6 +22,12 @@ function parseOddsMap(raw: unknown): Record<number, Odd[]> {
   return out;
 }
 
+export function emptyServerHomeBundle(): ServerHomeBundle {
+  return { fixtures: [], odds: {}, meta: null, topLeagues: [] };
+}
+
+const SSR_MAX_WAIT_MS = 4_000;
+
 /** Server-only: first paint bundle for home (100 matches + dropdown counts). */
 export async function fetchServerHomeBundle(): Promise<ServerHomeBundle> {
   let base: string;
@@ -78,6 +84,16 @@ export async function fetchServerHomeBundle(): Promise<ServerHomeBundle> {
 
     return { fixtures, odds, meta, topLeagues };
   } catch {
-    return { fixtures: [], odds: {}, meta: null, topLeagues: [] };
+    return emptyServerHomeBundle();
   }
+}
+
+/** Do not block the HTML longer than SSR_MAX_WAIT_MS — client/cache fills in if slow. */
+export async function fetchServerHomeBundleFast(): Promise<ServerHomeBundle> {
+  return Promise.race([
+    fetchServerHomeBundle(),
+    new Promise<ServerHomeBundle>((resolve) => {
+      setTimeout(() => resolve(emptyServerHomeBundle()), SSR_MAX_WAIT_MS);
+    }),
+  ]);
 }
