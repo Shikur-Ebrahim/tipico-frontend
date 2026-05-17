@@ -1,9 +1,15 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useState, type ReactNode } from 'react';
 import { api, Fixture, Odd } from '../lib/api';
-import { homeFeedCacheKey, peekHomeFeedCache } from '../lib/home-feed-cache';
+import {
+  findMatchInHomeCaches,
+  peekMatchDetailCache,
+  prefetchMatchDetailOdds,
+  resolveInstantMatchData,
+  writeMatchDetailCache,
+} from '../lib/match-detail-cache';
 import MatchDetailView from './match-detail-view';
 
 type Props = {
@@ -11,42 +17,6 @@ type Props = {
   initialFixture: Fixture | null;
   initialOdds: Odd[];
 };
-
-function findInHomeCaches(id: number): { fixture: Fixture | null; odds: Odd[] } {
-  if (typeof window === 'undefined') return { fixture: null, odds: [] };
-  const keys = [
-    homeFeedCacheKey('all', 'All countries', null),
-    homeFeedCacheKey('today', 'All countries', null),
-    homeFeedCacheKey('tomorrow', 'All countries', null),
-  ];
-  for (const key of keys) {
-    const cached = peekHomeFeedCache(key);
-    const hit = cached?.fixtures.find((f) => f.id === id);
-    if (hit && cached) {
-      return { fixture: hit, odds: cached.odds[id] ?? [] };
-    }
-  }
-  try {
-    for (let i = 0; i < sessionStorage.length; i++) {
-      const k = sessionStorage.key(i);
-      if (!k?.startsWith('tipico-home-feed:')) continue;
-      const raw = sessionStorage.getItem(k);
-      if (!raw) continue;
-      const parsed = JSON.parse(raw) as {
-        fixtures?: Fixture[];
-        odds?: Record<string, Odd[]>;
-      };
-      const hit = parsed.fixtures?.find((f) => f.id === id);
-      if (hit) {
-        const odds = parsed.odds?.[String(id)] ?? parsed.odds?.[id] ?? [];
-        return { fixture: hit, odds };
-      }
-    }
-  } catch {
-    /* ignore */
-  }
-  return { fixture: null, odds: [] };
-}
 
 function Shell({ children }: { children: ReactNode }) {
   return (
@@ -70,10 +40,32 @@ export default function MatchDetailPageClient({
   initialFixture,
   initialOdds,
 }: Props) {
-  const [fixture, setFixture] = useState<Fixture | null>(initialFixture);
-  const [odds, setOdds] = useState<Odd[]>(initialOdds);
-  const [loading, setLoading] = useState(!initialFixture);
+  const instant = resolveInstantMatchData(matchId, initialFixture, initialOdds);
+  const [fixture, setFixture] = useState<Fixture | null>(instant.fixture);
+  const [odds, setOdds] = useState<Odd[]>(instant.odds);
+  const [oddsLoading, setOddsLoading] = useState(
+    Boolean(instant.fixture) && instant.odds.length === 0
+  );
+  const [loading, setLoading] = useState(!instant.fixture);
   const [error, setError] = useState<string | null>(null);
+  useLayoutEffect(() => {
+    if (!Number.isFinite(matchId) || matchId <= 0) return;
+    const cached = peekMatchDetailCache(matchId);
+    const resolved = resolveInstantMatchData(matchId, initialFixture, initialOdds);
+    const nextFixture = resolved.fixture ?? cached?.fixture ?? null;
+    const nextOdds = resolved.odds.length > 0 ? resolved.odds : (cached?.odds ?? []);
+    if (nextFixture) {
+      setFixture(nextFixture);
+      setLoading(false);
+      if (nextOdds.length > 0) {
+        setOdds(nextOdds);
+        setOddsLoading(false);
+      } else {
+        setOddsLoading(true);
+      }
+    }
+    prefetchMatchDetailOdds(matchId);
+  }, [matchId, initialFixture, initialOdds]);
 
   useEffect(() => {
     if (!Number.isFinite(matchId) || matchId <= 0) {
@@ -82,54 +74,52 @@ export default function MatchDetailPageClient({
       return;
     }
 
-    if (initialFixture) {
-      setFixture(initialFixture);
-      setOdds(initialOdds);
-      setLoading(false);
-      if (initialOdds.length === 0) {
-        void api.getOdds(matchId).then((rows) => {
-          if (Array.isArray(rows) && rows.length > 0) setOdds(rows);
-        });
-      }
-      return;
-    }
-
     let cancelled = false;
 
     const load = async () => {
-      setLoading(true);
-      setError(null);
+      const cachedNow = peekMatchDetailCache(matchId);
+      const homeCached = findMatchInHomeCaches(matchId);
+      const hasFullOdds = (cachedNow?.odds?.length ?? 0) > 8;
+      const fixtureNow = cachedNow?.fixture ?? homeCached.fixture ?? null;
 
-      const cached = findInHomeCaches(matchId);
-      if (cached.fixture && !cancelled) {
-        setFixture(cached.fixture);
-        if (cached.odds.length > 0) setOdds(cached.odds);
-        setLoading(false);
+      if (!hasFullOdds && fixtureNow) {
+        setOddsLoading(true);
       }
 
       const [nextFixture, nextOdds] = await Promise.all([
-        api.getFixture(matchId),
-        api.getOdds(matchId),
+        fixtureNow ? Promise.resolve(fixtureNow) : api.getFixture(matchId),
+        hasFullOdds ? Promise.resolve(cachedNow!.odds) : api.getOdds(matchId),
       ]);
 
       if (cancelled) return;
 
       if (nextFixture) {
         setFixture(nextFixture);
-        setOdds(Array.isArray(nextOdds) && nextOdds.length > 0 ? nextOdds : cached.odds);
+        const rows = Array.isArray(nextOdds) ? nextOdds : [];
+        if (rows.length > 0) {
+          setOdds(rows);
+          writeMatchDetailCache(nextFixture, rows);
+        } else if (cachedNow?.odds?.length) {
+          setOdds(cachedNow.odds);
+          writeMatchDetailCache(nextFixture, cachedNow.odds);
+        } else {
+          writeMatchDetailCache(nextFixture, []);
+        }
         setError(null);
-      } else if (!cached.fixture) {
+        setLoading(false);
+      } else if (!fixture) {
         setError('This match could not be loaded. It may have ended or been removed.');
+        setLoading(false);
       }
 
-      setLoading(false);
+      setOddsLoading(false);
     };
 
     void load();
     return () => {
       cancelled = true;
     };
-  }, [matchId, initialFixture, initialOdds]);
+  }, [matchId]);
 
   if (!Number.isFinite(matchId) || matchId <= 0) {
     return (
@@ -173,5 +163,11 @@ export default function MatchDetailPageClient({
     );
   }
 
-  return <MatchDetailView initialFixture={fixture} initialOdds={odds} />;
+  return (
+    <MatchDetailView
+      initialFixture={fixture}
+      initialOdds={odds}
+      oddsLoading={oddsLoading}
+    />
+  );
 }

@@ -63,9 +63,18 @@ function sortMarketsForDisplay(entries: [string, Odd[]][]): [string, Odd[]][] {
   });
 }
 
+const ODDS_SKELETON_MARKETS = [
+  'Match Winner',
+  'Home/Away',
+  'Second Half Winner',
+  'Asian Handicap',
+  'Goals Over/Under',
+];
+
 type MatchOddsClientProps = {
   odds: Odd[];
   fixture: Fixture;
+  oddsLoading?: boolean;
 };
 
 const sortOrder: Record<string, number> = {
@@ -94,7 +103,7 @@ function sortOdds(odds: Odd[]) {
   });
 }
 
-export default function MatchOddsClient({ odds, fixture }: MatchOddsClientProps) {
+export default function MatchOddsClient({ odds, fixture, oddsLoading = false }: MatchOddsClientProps) {
   const [activeTab, setActiveTab] = useState<string>('All');
   const { addBet, isSelected } = useBetSlip();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -253,7 +262,24 @@ export default function MatchOddsClient({ odds, fixture }: MatchOddsClientProps)
           );
         })}
 
-        {markets.size === 0 && (
+        {markets.size === 0 && oddsLoading && (
+          <div className="space-y-3">
+            {ODDS_SKELETON_MARKETS.map((label) => (
+              <div key={label} className="rounded-xl overflow-hidden border border-[#E2E8F0] bg-white shadow-sm">
+                <div className="bg-[#FF8C00]/90 px-3.5 py-2.5 text-white">
+                  <span className="text-[13px] font-bold tracking-wide">{label}</span>
+                </div>
+                <div className="flex flex-col p-[2px] bg-white gap-[2px]">
+                  {[0, 1, 2].map((i) => (
+                    <div key={i} className="h-[42px] mx-[2px] rounded-[5px] bg-[#E8EDF5] animate-pulse" />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {markets.size === 0 && !oddsLoading && (
           <div className="text-center py-10 text-[#8B949E] flex flex-col items-center gap-3">
             <div className="w-12 h-12 rounded-full bg-[#161B22] flex items-center justify-center border border-[#30363D]">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>

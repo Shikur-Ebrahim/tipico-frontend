@@ -39,6 +39,7 @@ import {
 const PREFETCH_TOP_COUNTRIES = 12;
 import { mergeDayCountsIntoMeta } from '../lib/fixture-meta-utils';
 import BetSlipDrawer from './BetSlipDrawer';
+import MatchDetailLink from './match-detail-link';
 import { useBetSlip } from '../lib/betslip';
 import AuthModal from './auth-modal';
 import AdminDashboard from './AdminDashboard';
@@ -1537,7 +1538,7 @@ export default function HomePageClient({
               </button>
               <div ref={carouselRef} className="flex overflow-x-auto hide-scrollbar gap-3 pb-2 -mx-3 px-3">
               {featuredForCarousel.map(({ fixture, odds }) => (
-                <Link key={fixture.id} href={`/matches/${fixture.id}`} className="site-card rounded-xl p-3.5 min-w-[280px] shrink-0 flex flex-col gap-3">
+                <MatchDetailLink key={fixture.id} fixture={fixture} odds={odds} className="site-card rounded-xl p-3.5 min-w-[280px] shrink-0 flex flex-col gap-3">
                   <div className="flex justify-between items-center">
                     <span
                       className="text-[10px] text-[#FF8C00] font-bold bg-[rgba(255,140,0,0.12)] px-2 py-1 rounded"
@@ -1603,7 +1604,7 @@ export default function HomePageClient({
                        );
                      })()}
                   </div>
-                </Link>
+                </MatchDetailLink>
               ))}
             </div>  {/* closes the scrollable div */}
             </div>  {/* closes the relative wrapper */}
@@ -1718,7 +1719,7 @@ export default function HomePageClient({
                         const shouldShowScore = isLive || isLiveStatus || isFinished;
 
                         return (
-                          <Link key={fixture.id} href={`/matches/${fixture.id}`} className="block p-3 bg-[#E8EDF5] hover:bg-[#DDE4EE] transition-colors rounded-[5px]">
+                          <MatchDetailLink key={fixture.id} fixture={fixture} odds={oddsMap[fixture.id] ?? []} className="block p-3 bg-[#E8EDF5] hover:bg-[#DDE4EE] transition-colors rounded-[5px]">
                             <div className="flex gap-3 mb-2.5">
                                <div className="flex flex-col items-center justify-center w-[52px] min-w-[52px] h-[48px] bg-white rounded-lg shadow-sm border border-[#E2E8F0]">
                                  {renderStatus()}
@@ -1819,7 +1820,7 @@ export default function HomePageClient({
                                  </div>
                                );
                              })()}
-                           </Link>
+                           </MatchDetailLink>
                          )
                       })}
                     </div>

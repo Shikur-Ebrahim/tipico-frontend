@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getPublicApiBaseUrl } from '@/lib/public-api-url';
 
 export const runtime = 'nodejs';
-export const dynamic = 'force-dynamic';
+export const revalidate = 15;
 
 function backendBase(): string {
   try {
@@ -28,14 +28,16 @@ export async function GET(
   try {
     const upstream = await fetch(url, {
       headers: { Accept: 'application/json' },
-      cache: 'no-store',
+      ...(bust ? { cache: 'no-store' as const } : { next: { revalidate: 15 } }),
     });
     const body = await upstream.text();
     return new NextResponse(body, {
       status: upstream.ok ? 200 : upstream.status,
       headers: {
         'Content-Type': 'application/json',
-        'Cache-Control': 'private, no-cache',
+        'Cache-Control': bust
+          ? 'private, no-cache'
+          : 'public, s-maxage=15, stale-while-revalidate=60',
       },
     });
   } catch {

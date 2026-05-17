@@ -96,11 +96,17 @@ function computePollDelayMs(f: Fixture): number {
 type Props = {
   initialFixture: Fixture;
   initialOdds: Odd[];
+  oddsLoading?: boolean;
 };
 
-export default function MatchDetailView({ initialFixture, initialOdds }: Props) {
+export default function MatchDetailView({ initialFixture, initialOdds, oddsLoading = false }: Props) {
   const [fixture, setFixture] = useState(initialFixture);
   const [odds, setOdds] = useState(initialOdds);
+
+  useEffect(() => {
+    setFixture(initialFixture);
+    setOdds(initialOdds);
+  }, [initialFixture, initialOdds]);
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [user, setUser] = useState<{ id: number } | null>(null);
   const [isBetHistoryOpen, setIsBetHistoryOpen] = useState(false);
@@ -138,12 +144,13 @@ export default function MatchDetailView({ initialFixture, initialOdds }: Props) 
       }
     };
 
-    timeoutId = setTimeout(runTick, 0);
+    const startDelay = oddsLoading || initialOdds.length === 0 ? 4000 : 1500;
+    timeoutId = setTimeout(runTick, startDelay);
     return () => {
       cancelled = true;
       clearTimeout(timeoutId);
     };
-  }, [fixtureId]);
+  }, [fixtureId, oddsLoading, initialOdds.length]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -281,7 +288,7 @@ export default function MatchDetailView({ initialFixture, initialOdds }: Props) 
         </div>
       </section>
 
-      <MatchOddsClient odds={odds} fixture={fixture} />
+      <MatchOddsClient odds={odds} fixture={fixture} oddsLoading={oddsLoading} />
 
       <nav className="fixed bottom-0 left-0 right-0 h-[64px] bg-[#161B22] border-t border-[#30363D] flex justify-around items-center z-50">
         <Link href="/" className="flex flex-col items-center gap-1 text-[#FF8C00]">
