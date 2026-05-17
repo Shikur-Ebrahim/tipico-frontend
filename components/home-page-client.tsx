@@ -39,6 +39,7 @@ import {
 const PREFETCH_TOP_COUNTRIES = 12;
 import { mergeDayCountsIntoMeta } from '../lib/fixture-meta-utils';
 import BetSlipDrawer from './BetSlipDrawer';
+import TelegramSupportFab from './TelegramSupportFab';
 import MatchDetailLink from './match-detail-link';
 import { useBetSlip } from '../lib/betslip';
 import AuthModal from './auth-modal';
@@ -1849,6 +1850,8 @@ export default function HomePageClient({
             )}
         </section>
       </main>
+
+      <TelegramSupportFab />
 
       {/* Fixed Bottom Navigation */}
       <nav className="champx-bottom-nav">

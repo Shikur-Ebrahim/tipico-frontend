@@ -8,6 +8,7 @@ import type { DepositTicket } from './DepositRequests';
 import type { WithdrawalTicket } from './WithdrawalRequests';
 import AdminAccountSettings from './AdminAccountSettings';
 import AdminDepositRuleSettings from './AdminDepositRuleSettings';
+import AdminTelegramSettings from './AdminTelegramSettings';
 import AdminUsersManagement from './AdminUsersManagement';
 import AdminManualTicketCreator from './AdminManualTicketCreator';
 
@@ -46,6 +47,9 @@ const adminActions = [
   { id: 'depositRule', label: 'Deposit Rule', icon: (
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
   ), color: 'bg-amber-600' },
+  { id: 'telegram', label: 'Telegram', icon: (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71L12.6 16.3l-1.99 1.93c-.23.23-.42.42-.83.42z"/></svg>
+  ), color: 'bg-sky-500' },
   { id: 'setting', label: 'Settings', icon: (
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
   ), color: 'bg-gray-700' },
@@ -189,6 +193,10 @@ export default function AdminDashboard({ user, onLogout, onClose }: AdminDashboa
     return <AdminAccountSettings user={user} onClose={() => setCurrentView('main')} />;
   }
 
+  if (currentView === 'support') {
+    return <AdminTelegramSettings onClose={() => setCurrentView('main')} />;
+  }
+
   if (currentView === 'depositRule') {
     return <AdminDepositRuleSettings onClose={() => setCurrentView('main')} />;
   }
@@ -242,6 +250,10 @@ export default function AdminDashboard({ user, onLogout, onClose }: AdminDashboa
               if (action.id === 'tickets') {
                 void refreshAdminCaches();
                 setCurrentView('tickets');
+                return;
+              }
+              if (action.id === 'telegram') {
+                setCurrentView('support');
                 return;
               }
               if (action.id === 'setting') {
