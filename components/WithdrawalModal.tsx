@@ -5,6 +5,7 @@ import { api } from '../lib/api';
 import { TIPICO_WALLET_UPDATED_EVENT, broadcastWalletSyncAcrossTabs } from '../lib/ui-events';
 
 import { getPublicApiBaseUrl } from '@/lib/public-api-url';
+import WithdrawalDepositRuleBanner from './WithdrawalDepositRuleBanner';
 
 const API_BASE = getPublicApiBaseUrl();
 const MIN_WITHDRAW = 100;
@@ -60,6 +61,9 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
   const [hasPending, setHasPending] = useState(false);
   const [pendingSummary, setPendingSummary] = useState<string | null>(null);
   const [history, setHistory] = useState<HistoryRow[]>([]);
+  const [depositEligible, setDepositEligible] = useState(true);
+  const [totalDeposits, setTotalDeposits] = useState(0);
+  const [minDepositRequired, setMinDepositRequired] = useState(6665);
   const methodsRef = useRef<WithdrawalMethod[]>([]);
   const fetchGenRef = useRef(0);
   const userStateGenRef = useRef(0);
@@ -88,21 +92,29 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
       setHasPending(false);
       setPendingSummary(null);
       setHistory([]);
+      setDepositEligible(true);
       return;
     }
     const gen = ++userStateGenRef.current;
     setHistoryLoading(true);
     try {
-      const [pendRes, histRes] = await Promise.all([
+      const [pendRes, histRes, eligRes] = await Promise.all([
         fetch(`${API_BASE}/user/pending-withdrawal`, { headers: { Authorization: `Bearer ${token}` } }),
         fetch(`${API_BASE}/user/withdrawal-history`, { headers: { Authorization: `Bearer ${token}` } }),
+        fetch(`${API_BASE}/user/withdrawal-eligibility`, { headers: { Authorization: `Bearer ${token}` } }),
       ]);
       const pendData = pendRes.ok ? await pendRes.json().catch(() => ({})) : {};
       const histData = histRes.ok ? await histRes.json().catch(() => []) : [];
+      const eligData = eligRes.ok ? await eligRes.json().catch(() => ({})) : {};
       if (userStateGenRef.current !== gen) return;
 
       const pending = Boolean(pendData?.hasPending);
       setHasPending(pending);
+      setDepositEligible(Boolean((eligData as { eligible?: boolean }).eligible));
+      const td = Number((eligData as { totalDeposits?: number }).totalDeposits);
+      const mr = Number((eligData as { minRequired?: number }).minRequired);
+      setTotalDeposits(Number.isFinite(td) ? td : 0);
+      setMinDepositRequired(Number.isFinite(mr) ? mr : 6665);
       const req = pendData?.request as { amount?: string | number; method_name?: string } | null;
       if (pending && req) {
         setPendingSummary(`${req.amount} ETB · ${req.method_name || 'Withdrawal'} — processing`);
@@ -144,6 +156,12 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
   }, [isOpen, user?.id, fetchMethods, loadUserWithdrawalState]);
 
   const handleMethodSelect = (method: WithdrawalMethod) => {
+    if (!depositEligible) {
+      setError(
+        `To withdraw in Tipico betting, your total approved deposits must reach ${minDepositRequired} ETB. You have deposited ${totalDeposits.toFixed(2)} ETB so far.`
+      );
+      return;
+    }
     const val = parseFloat(amount);
     if (!Number.isFinite(val) || val < MIN_WITHDRAW) {
       setError(`Enter at least ${MIN_WITHDRAW} ETB`);
@@ -228,6 +246,13 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
       </header>
 
       <main className="mx-auto flex min-h-0 w-full max-w-md flex-1 flex-col overflow-y-auto overscroll-contain px-4 py-4 pb-28 sm:px-5">
+            {!hasPending && !depositEligible ? (
+              <WithdrawalDepositRuleBanner
+                minDepositRequired={minDepositRequired}
+                totalDeposits={totalDeposits}
+              />
+            ) : null}
+
             {hasPending && (
               <div className="mb-4 rounded-2xl border-2 border-amber-200 bg-amber-50 p-4 shadow-sm">
                 <div className="flex items-start gap-3">
@@ -247,7 +272,7 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
               </div>
             )}
 
-            {step === 'selection' && !hasPending && (
+            {step === 'selection' && !hasPending && depositEligible && (
               <div className="space-y-6 animate-in fade-in duration-300">
                 <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                   <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Available</p>
@@ -309,7 +334,7 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
               </div>
             )}
 
-            {step === 'details' && selectedMethod && !hasPending && (
+            {step === 'details' && selectedMethod && !hasPending && depositEligible && (
               <form onSubmit={handleSubmit} className="space-y-6 animate-in slide-in-from-right duration-300">
                 <div className="flex items-center gap-4 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-100">
                   <div className="h-12 w-12 rounded-xl bg-[#F8FAFC] p-2 shadow-inner">

@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { api, Fixture, LiveMatch, League } from '../../lib/api';
+import { api, FIXTURE_LIST_LIMIT, Fixture, LiveMatch, League } from '../../lib/api';
 import { isMatchClosedForBetting } from '../../lib/match-status';
 
 export const dynamic = 'force-dynamic';
@@ -44,7 +44,7 @@ async function safeLoad<T>(loader: () => Promise<T>, fallback: T) {
 
 async function loadMatchesPageData() {
   const [fixtures, liveMatches, topLeagues] = await Promise.all([
-    safeLoad(() => api.getFixtures({ limit: 3000 }), [] as Fixture[]),
+    safeLoad(() => api.getFixtures({ limit: FIXTURE_LIST_LIMIT, has_odds: true }), [] as Fixture[]),
     safeLoad(() => api.getLiveMatches(), [] as LiveMatch[]),
     safeLoad(() => api.getTopLeagues(), [] as League[]),
   ]);

@@ -1,8 +1,23 @@
 'use client';
 
 import Link from 'next/link';
-import { startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { api, Fixture, League, LiveMatch, Odd } from '../lib/api';
+import {
+  startTransition,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import { api, Fixture, FixtureMeta, League, LiveMatch, Odd } from '../lib/api';
+import { getMatchWinnerDisplayOdds, hasMatchWinnerOdds } from '../lib/match-odds-display';
+import {
+  groupFixturesByLeague,
+  HOME_INITIAL_VISIBLE,
+  HOME_LOAD_MORE_STEP,
+  orderFixturesForHomeList,
+} from '../lib/home-fixture-list';
 import { isMatchClosedForBetting } from '../lib/match-status';
 import BetSlipDrawer from './BetSlipDrawer';
 import { useBetSlip } from '../lib/betslip';
@@ -76,32 +91,6 @@ function getLiveBadge(match: LiveMatch) {
   return match.status || 'LIVE';
 }
 
-function getDisplayOdds(odds: Odd[]) {
-  const selections = new Map<string, Odd>();
-
-  for (const odd of odds) {
-    if (!selections.has(odd.selection)) {
-      selections.set(odd.selection, odd);
-    }
-  }
-
-  return Array.from(selections.values()).slice(0, 3);
-}
-
-/** Prefer Match Winner / 1X2 lines from DB; fall back to any odds for the row. */
-function getMatchWinnerDisplayOdds(odds: Odd[]) {
-  if (!odds?.length) return [];
-  const lower = (s: string) => s.toLowerCase();
-  const mw = odds.filter(
-    (o) =>
-      lower(o.market_name || '').includes('match winner') ||
-      lower(o.market_name || '').includes('full time result') ||
-      lower(o.market_name || '') === '1x2'
-  );
-  const pool = mw.length > 0 ? mw : odds;
-  return getDisplayOdds(pool);
-}
-
 /** Scales balance text so long amounts (e.g. 10000000.00) fit on small screens without overlapping. */
 function headerBalanceFontSizes(amountFormatted: string): { amountPx: number; currencyPx: number } {
   const n = amountFormatted.length;
@@ -120,10 +109,10 @@ function getSelectionName(selection: string, fixture: Fixture) {
 }
 
 const CAROUSEL_ACTIVE_STATUSES = ['NS', 'TBD', '1H', '2H', 'HT', 'ET', 'P', 'LIVE'];
-const LIVE_ODDS_POLL_STATUSES = new Set(['1H', '2H', 'HT', 'ET', 'P', 'LIVE']);
-
-/** Align with backend `syncService` live + odds crons (every 30 seconds in `startSyncJobs`). */
-const LIVE_ODDS_POLL_INTERVAL_MS = 30_000;
+/** Live scores / in-play list only (lightweight). */
+const LIVE_POLL_INTERVAL_MS = 45_000;
+/** Dropdown counts from DB (no full fixture payload). */
+const META_REFRESH_INTERVAL_MS = 180_000;
 
 const HOME_PROMO_BANNERS = [
   '/banner/banner1.jpg',
@@ -131,56 +120,28 @@ const HOME_PROMO_BANNERS = [
   '/banner/banner6.png',
 ] as const;
 
-function getDateKey(value: string) {
-  const d = new Date(value);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
-
-function isInSelectedDayRange(fixture: Fixture, selectedDay: string) {
-  if (selectedDay === 'all') return true;
-  
-  const fixtureDate = new Date(fixture.match_date);
-  const now = new Date();
-  const todayStart = new Date(now);
-  todayStart.setHours(0, 0, 0, 0);
-  const tomorrowStart = new Date(todayStart);
-  tomorrowStart.setDate(tomorrowStart.getDate() + 1);
-
-  if (selectedDay === 'today') {
-    return fixtureDate >= todayStart && fixtureDate < tomorrowStart;
-  }
-
-  if (selectedDay === 'tomorrow') {
-    const tomorrowEnd = new Date(tomorrowStart);
-    tomorrowEnd.setDate(tomorrowEnd.getDate() + 1);
-    return fixtureDate >= tomorrowStart && fixtureDate < tomorrowEnd;
-  }
-
-  if (selectedDay.startsWith('date:')) {
-    return getDateKey(fixture.match_date) === selectedDay.replace('date:', '');
-  }
-
-  return true;
+function dayIdToLabel(dayId: string) {
+  if (dayId === 'all') return 'All Games';
+  if (dayId === 'today') return 'Today';
+  if (dayId === 'tomorrow') return 'Tomorrow';
+  if (dayId.startsWith('date:')) return formatDayHeader(dayId.replace('date:', ''));
+  return dayId;
 }
 
 export default function HomePageClient({
   liveMatches: initialLiveMatches,
   upcomingFixtures: initialUpcomingFixtures,
-  topLeagues,
-  featuredMatches: initialFeaturedMatches,
+  topLeagues: initialTopLeagues,
+  featuredMatches: _initialFeaturedMatches,
 }: HomePageClientProps) {
   const [liveMatches, setLiveMatches] = useState<LiveMatch[]>(initialLiveMatches);
   const [upcomingFixtures, setUpcomingFixtures] = useState<Fixture[]>(initialUpcomingFixtures);
-  const [oddsMap, setOddsMap] = useState<Record<number, Odd[]>>(() => {
-    const m: Record<number, Odd[]> = {};
-    for (const { fixture, odds } of initialFeaturedMatches) {
-      m[fixture.id] = odds;
-    }
-    return m;
-  });
+  const [fixtureMeta, setFixtureMeta] = useState<FixtureMeta | null>(null);
+  const [topLeagues, setTopLeagues] = useState<League[]>(initialTopLeagues);
+  const [oddsMap, setOddsMap] = useState<Record<number, Odd[]>>({});
+  const [isInitialLoading, setIsInitialLoading] = useState(
+    () => initialUpcomingFixtures.length === 0
+  );
   const [activeTab, setActiveTab] = useState<'highlights' | 'upcoming' | 'countries'>('upcoming');
   const [selectedDay, setSelectedDay] = useState('all');
   const [selectedCountry, setSelectedCountry] = useState('All countries');
@@ -196,6 +157,7 @@ export default function HomePageClient({
   const [selectedLeagueName, setSelectedLeagueName] = useState<string | null>(null);
   const [showLiveOnly, setShowLiveOnly] = useState(false);
   const [mainSearch, setMainSearch] = useState('');
+  const deferredMainSearch = useDeferredValue(mainSearch);
   const [showMainSearch, setShowMainSearch] = useState(false);
   const carouselRef = useRef<HTMLDivElement>(null);
   const openDepositAfterLoginRef = useRef(false);
@@ -211,6 +173,12 @@ export default function HomePageClient({
   const [isWithdrawalOpen, setIsWithdrawalOpen] = useState(false);
   const [isBetHistoryOpen, setIsBetHistoryOpen] = useState(false);
   const [homePromoBannerIndex, setHomePromoBannerIndex] = useState(0);
+  /** Frontend window: how many matches to show (DB may hold up to FIXTURE_LIST_LIMIT). */
+  const [visibleLimit, setVisibleLimit] = useState(HOME_INITIAL_VISIBLE);
+  const [showSeeMore, setShowSeeMore] = useState(false);
+  const [isLoadingVisibleOdds, setIsLoadingVisibleOdds] = useState(false);
+  const listEndRef = useRef<HTMLDivElement>(null);
+  const fixtureFetchGenRef = useRef(0);
 
   const scrollCarousel = (dir: 'left' | 'right') => {
     if (carouselRef.current) {
@@ -263,7 +231,7 @@ export default function HomePageClient({
   useEffect(() => {
     if (!user?.id || typeof window === 'undefined' || !localStorage.getItem('token')) return;
 
-    const POLL_MS = 2_500;
+    const POLL_MS = 10_000;
 
     const pollWallet = async () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
@@ -354,72 +322,48 @@ export default function HomePageClient({
     });
   };
 
+  useEffect(() => {
+    setVisibleLimit(HOME_INITIAL_VISIBLE);
+    setShowSeeMore(false);
+  }, [selectedDay, selectedCountry, selectedLeagueId, showLiveOnly]);
+
   const dayOptions = useMemo<DayOption[]>(() => {
-    const now = new Date();
-    const todayStart = new Date(now);
-    todayStart.setHours(0, 0, 0, 0);
-
-    const options: DayOption[] = [{ id: 'all', label: 'All Games', count: upcomingFixtures.length }];
-
-    for (let i = 0; i < 7; i++) {
-      const date = new Date(todayStart);
-      date.setDate(todayStart.getDate() + i);
-      const dateKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
-        date.getDate()
-      ).padStart(2, '0')}`;
-
-      let label = formatDayHeader(date);
-      let id = `date:${dateKey}`;
-
-      if (i === 0) {
-        label = 'Today';
-        id = 'today';
-      } else if (i === 1) {
-        label = 'Tomorrow';
-        id = 'tomorrow';
-      }
-
-      const count = upcomingFixtures.filter((f) => isInSelectedDayRange(f, id)).length;
-      options.push({ id, label, count });
+    if (!fixtureMeta?.days?.length) {
+      return [{ id: 'all', label: 'All Games', count: 0 }];
     }
-
-    return options;
-  }, [upcomingFixtures]);
+    return fixtureMeta.days.map((d) => ({
+      id: d.id,
+      label: dayIdToLabel(d.id),
+      count: d.count,
+    }));
+  }, [fixtureMeta]);
 
   const selectedDayLabel = useMemo(
     () => dayOptions.find((option) => option.id === selectedDay)?.label || 'Today',
     [dayOptions, selectedDay]
   );
 
-  const dayFilteredFixtures = useMemo(
-    () => upcomingFixtures.filter((fixture) => isInSelectedDayRange(fixture, selectedDay)),
-    [upcomingFixtures, selectedDay]
-  );
-
   const countryOptions = useMemo<CountryOption[]>(() => {
-    const grouped = new Map<string, CountryOption>();
-
-    for (const fixture of dayFilteredFixtures) {
-      const name = fixture.country_name || 'International';
-      const current = grouped.get(name);
-
-      if (current) {
-        current.count += 1;
-        continue;
-      }
-
-      grouped.set(name, {
-        name,
-        count: 1,
-        flagUrl: fixture.flag_url || null,
-      });
+    if (!fixtureMeta?.countries?.length) {
+      return [{ name: 'All countries', count: 0, flagUrl: null }];
     }
+    return fixtureMeta.countries.map((c) => ({
+      name: c.name,
+      count: c.count,
+      flagUrl: c.flag_url,
+    }));
+  }, [fixtureMeta]);
 
-    return [
-      { name: 'All countries', count: dayFilteredFixtures.length, flagUrl: null },
-      ...Array.from(grouped.values()).sort((a, b) => a.name.localeCompare(b.name)),
-    ];
-  }, [dayFilteredFixtures]);
+  const filteredTotalCount = useMemo(() => {
+    if (!fixtureMeta) return 0;
+    if (selectedCountry !== 'All countries') {
+      return fixtureMeta.countries.find((c) => c.name === selectedCountry)?.count ?? 0;
+    }
+    if (selectedDay !== 'all') {
+      return fixtureMeta.days.find((d) => d.id === selectedDay)?.count ?? 0;
+    }
+    return fixtureMeta.total;
+  }, [fixtureMeta, selectedDay, selectedCountry]);
 
   useEffect(() => {
     if (!countryOptions.some((country) => country.name === selectedCountry)) {
@@ -429,217 +373,275 @@ export default function HomePageClient({
 
   const filteredFixtures = useMemo(() => {
     const LIVE_STATUSES = ['1H', '2H', 'HT', 'ET', 'P', 'LIVE'];
-    // Base pool: live-only shows in-play only (regulation 90' counts as finished — drops from Live tab)
-    const base = showLiveOnly
-      ? dayFilteredFixtures.filter((f) => {
+    let pool = showLiveOnly
+      ? upcomingFixtures.filter((f) => {
           const st = f.status?.toUpperCase() || '';
           if (!LIVE_STATUSES.includes(st)) return false;
           return !isMatchClosedForBetting(f);
         })
-      : dayFilteredFixtures;
+      : upcomingFixtures;
 
-    // League filter takes priority over country filter
-    if (selectedLeagueId !== null) {
-      let pool = base.filter((fixture) => fixture.api_league_id === selectedLeagueId);
-      if (mainSearch.trim()) {
-        const q = mainSearch.toLowerCase();
-        pool = pool.filter(f => f.home_team_name.toLowerCase().includes(q) || f.away_team_name.toLowerCase().includes(q) || f.league_name.toLowerCase().includes(q));
-      }
-      return pool;
-    }
-    let pool = selectedCountry === 'All countries' ? base : base.filter((fixture) => (fixture.country_name || 'International') === selectedCountry);
-    if (mainSearch.trim()) {
-      const q = mainSearch.toLowerCase();
-      pool = pool.filter(f => f.home_team_name.toLowerCase().includes(q) || f.away_team_name.toLowerCase().includes(q) || f.league_name.toLowerCase().includes(q) || (f.country_name || '').toLowerCase().includes(q));
+    const q = deferredMainSearch.trim().toLowerCase();
+    if (q) {
+      pool = pool.filter(
+        (f) =>
+          f.home_team_name.toLowerCase().includes(q) ||
+          f.away_team_name.toLowerCase().includes(q) ||
+          f.league_name.toLowerCase().includes(q) ||
+          (f.country_name || '').toLowerCase().includes(q)
+      );
     }
     return pool;
-  }, [dayFilteredFixtures, selectedCountry, selectedLeagueId, showLiveOnly, mainSearch]);
+  }, [upcomingFixtures, showLiveOnly, deferredMainSearch]);
 
-  const displayedUpcoming = useMemo(() => filteredFixtures, [filteredFixtures]);
-  const displayedFixtureIdsRef = useRef<number[]>([]);
+  const orderedFilteredFixtures = useMemo(
+    () => orderFixturesForHomeList(filteredFixtures),
+    [filteredFixtures]
+  );
 
-  useLayoutEffect(() => {
-    displayedFixtureIdsRef.current = displayedUpcoming.map((f) => f.id);
-  }, [displayedUpcoming]);
+  const visibleFixturesPool = orderedFilteredFixtures;
+
+  const hasMoreMatches =
+    !showLiveOnly && !deferredMainSearch.trim() && visibleLimit < filteredTotalCount;
+
+  /** Only render rows once 1X2 odds are loaded for that fixture. */
+  const displayedUpcoming = useMemo(
+    () => visibleFixturesPool.filter((f) => hasMatchWinnerOdds(oddsMap[f.id])),
+    [visibleFixturesPool, oddsMap]
+  );
 
   const liveFixtureIds = useMemo(() => new Set(liveMatches.map((match) => match.fixture_id)), [liveMatches]);
 
+  const [carouselFixtures, setCarouselFixtures] = useState<Fixture[]>([]);
+
   const featuredForCarousel = useMemo(() => {
-    const slice = upcomingFixtures
-      .filter((f) => CAROUSEL_ACTIVE_STATUSES.includes((f.status || '').toUpperCase()))
-      .slice(0, 10);
-    return slice.map((fixture) => ({
-      fixture,
-      odds: oddsMap[fixture.id] ?? [],
-    }));
-  }, [upcomingFixtures, oddsMap]);
+    return carouselFixtures
+      .filter((f) => hasMatchWinnerOdds(oddsMap[f.id]))
+      .slice(0, 10)
+      .map((fixture) => ({
+        fixture,
+        odds: oddsMap[fixture.id] ?? [],
+      }));
+  }, [carouselFixtures, oddsMap]);
+
+  const carouselFixtureIds = useMemo(
+    () => carouselFixtures.slice(0, 10).map((f) => f.id),
+    [carouselFixtures]
+  );
+
+  const listFetchParams = useMemo(() => {
+    const params: NonNullable<Parameters<typeof api.getFixtures>[0]> = {
+      limit: visibleLimit,
+      has_odds: true,
+    };
+    if (selectedDay !== 'all') params.day = selectedDay;
+    if (selectedCountry !== 'All countries') params.country = selectedCountry;
+    if (selectedLeagueId !== null) params.api_league_id = selectedLeagueId;
+    return params;
+  }, [visibleLimit, selectedDay, selectedCountry, selectedLeagueId]);
+
+  const oddsMapRef = useRef(oddsMap);
+  oddsMapRef.current = oddsMap;
+
+  const oddsTargetIds = useMemo(() => {
+    const ids = new Set<number>();
+    for (const f of visibleFixturesPool) ids.add(f.id);
+    for (const id of carouselFixtureIds) ids.add(id);
+    for (const m of liveMatches) ids.add(m.fixture_id);
+    return [...ids].sort((a, b) => a - b);
+  }, [visibleFixturesPool, carouselFixtureIds, liveMatches]);
 
   useEffect(() => {
     let cancelled = false;
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const needIds = oddsTargetIds.filter((id) => !hasMatchWinnerOdds(oddsMapRef.current[id]));
+    if (needIds.length === 0) return;
 
-    const clearTimer = () => {
-      if (timeoutId !== undefined) {
-        clearTimeout(timeoutId);
-        timeoutId = undefined;
-      }
-    };
-
-    const schedule = (fn: () => void, ms: number) => {
-      clearTimer();
-      timeoutId = setTimeout(fn, ms);
-    };
-
-    const tick = async () => {
-      if (cancelled) return;
+    const loadOdds = async () => {
+      setIsLoadingVisibleOdds(true);
+      const CHUNK = 120;
       try {
-        const [nextLive, nextUpcoming] = await Promise.all([
-          api.getLiveMatches(),
-          api.getFixtures({ limit: 3000 }),
-        ]);
-        if (cancelled) return;
-        const liveArr = Array.isArray(nextLive) ? nextLive : [];
-        const fixturesList = Array.isArray(nextUpcoming) ? nextUpcoming : [];
-
-        startTransition(() => {
+        for (let i = 0; i < needIds.length; i += CHUNK) {
           if (cancelled) return;
-          setLiveMatches(liveArr);
-          setUpcomingFixtures(fixturesList);
-        });
-
-        const ids = new Set<number>();
-        const liveOpenIds = new Set<number>();
-        for (const m of liveArr) {
-          if (!isMatchClosedForBetting({ status: m.status, minute: m.minute })) {
-            ids.add(m.fixture_id);
-            liveOpenIds.add(m.fixture_id);
-          }
-        }
-        for (const f of fixturesList) {
-          if (
-            LIVE_ODDS_POLL_STATUSES.has((f.status || '').toUpperCase()) &&
-            !isMatchClosedForBetting(f)
-          ) {
-            ids.add(f.id);
-          }
-        }
-        const featuredSlice = fixturesList
-          .filter((f) => CAROUSEL_ACTIVE_STATUSES.includes((f.status || '').toUpperCase()))
-          .slice(0, 10);
-        for (const f of featuredSlice) {
-          ids.add(f.id);
-        }
-        for (const id of displayedFixtureIdsRef.current.slice(0, 150)) {
-          ids.add(id);
-        }
-
-        const idArr = Array.from(ids);
-        const liveFirst = idArr.filter((id) => liveOpenIds.has(id));
-        const restIds = idArr.filter((id) => !liveOpenIds.has(id));
-        const idList = [...liveFirst, ...restIds].slice(0, 180);
-
-        const updates: Record<number, Odd[]> = {};
-        const BATCH = 8;
-        for (let i = 0; i < idList.length; i += BATCH) {
+          const chunk = needIds.slice(i, i + CHUNK);
+          const part = await api.getOddsBulk(chunk).catch(() => ({} as Record<number, Odd[]>));
           if (cancelled) return;
-          const chunk = idList.slice(i, i + BATCH);
-          const results = await Promise.all(chunk.map((id) => api.getOdds(id, { refresh: true }).catch(() => [] as Odd[])));
-          chunk.forEach((id, j) => {
-            updates[id] = Array.isArray(results[j]) ? results[j] : [];
-          });
-        }
-        if (!cancelled) {
           startTransition(() => {
             setOddsMap((prev) => {
               const next = { ...prev };
-              for (const [fid, rows] of Object.entries(updates)) {
-                next[Number(fid)] = rows;
+              for (const [key, rows] of Object.entries(part)) {
+                const fid = Number(key);
+                if (Number.isFinite(fid) && hasMatchWinnerOdds(rows)) next[fid] = rows;
               }
               return next;
             });
           });
         }
-      } catch {
-        /* ignore */
       } finally {
-        if (!cancelled) {
-          schedule(() => {
-            void tick();
-          }, LIVE_ODDS_POLL_INTERVAL_MS);
-        }
+        if (!cancelled) setIsLoadingVisibleOdds(false);
       }
     };
 
-    schedule(() => {
-      void tick();
-    }, 2_500);
+    void loadOdds();
+    return () => {
+      cancelled = true;
+    };
+  }, [oddsTargetIds]);
+
+  const loadFixtureList = useCallback(async () => {
+    const gen = ++fixtureFetchGenRef.current;
+    const limit = showLiveOnly ? Math.min(400, visibleLimit) : visibleLimit;
+    const fixtures = await api.getFixtures({ ...listFetchParams, limit }).catch(() => [] as Fixture[]);
+    if (gen !== fixtureFetchGenRef.current) return;
+    startTransition(() => {
+      setUpcomingFixtures(Array.isArray(fixtures) ? fixtures : []);
+      setIsInitialLoading(false);
+    });
+  }, [listFetchParams, showLiveOnly, visibleLimit]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setIsInitialLoading(true);
+    void (async () => {
+      try {
+        await loadFixtureList();
+      } catch {
+        if (!cancelled) setIsInitialLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [loadFixtureList]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let metaTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const loadMeta = async () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      try {
+        const meta = await api.getFixturesMeta({
+          has_odds: true,
+          day: selectedDay !== 'all' ? selectedDay : undefined,
+        });
+        if (!cancelled) startTransition(() => setFixtureMeta(meta));
+      } catch {
+        /* ignore */
+      }
+    };
+
+    void loadMeta();
+    metaTimer = setInterval(() => void loadMeta(), META_REFRESH_INTERVAL_MS);
 
     return () => {
       cancelled = true;
-      clearTimer();
+      if (metaTimer) clearInterval(metaTimer);
+    };
+  }, [selectedDay]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .getFixtures({ limit: 12, has_odds: true })
+      .then((rows) => {
+        if (cancelled) return;
+        const list = Array.isArray(rows) ? rows : [];
+        startTransition(() =>
+          setCarouselFixtures(
+            list.filter((f) => CAROUSEL_ACTIVE_STATUSES.includes((f.status || '').toUpperCase()))
+          )
+        );
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
     };
   }, []);
 
-  const TOP_LEAGUE_PRIORITY = [
-    39,  // English Premier League
-    2,   // UEFA Champions League
-    140, // Spanish La Liga
-    135, // Italian Serie A
-    78,  // German Bundesliga
-    61,  // French Ligue 1
-    3,   // UEFA Europa League
-    848, // UEFA Europa Conference League
-    45,  // English FA Cup
-    40,  // English Championship
-    307, // Saudi Pro League
-    253, // Major League Soccer - MLS
-    71,  // Brazilian Serie A
-    88,  // Dutch Eredivisie
-    94   // Portuguese Primeira Liga
-  ];
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
 
-  const groupedMatches = useMemo(() => {
-    const grouped = new Map<string, typeof displayedUpcoming>();
-    for (const fixture of displayedUpcoming) {
-      const country = fixture.country_name || 'International';
-      const leagueKey = `${country}: ${fixture.league_name}`;
-      if (!grouped.has(leagueKey)) {
-        grouped.set(leagueKey, []);
+    const pollLive = async () => {
+      if (cancelled) return;
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        timer = setTimeout(() => void pollLive(), LIVE_POLL_INTERVAL_MS);
+        return;
       }
-      grouped.get(leagueKey)!.push(fixture);
-    }
-    // Sort grouped matches: Live matches first, then Top 15 Priority, then alphabetically
-    return Array.from(grouped.entries()).sort(([keyA, matchesA], [keyB, matchesB]) => {
-      // 1. Top League Priority (Highest Priority)
-      const apiIdA = matchesA[0].api_league_id;
-      const apiIdB = matchesB[0].api_league_id;
-      
-      const priorityA = TOP_LEAGUE_PRIORITY.indexOf(apiIdA);
-      const priorityB = TOP_LEAGUE_PRIORITY.indexOf(apiIdB);
-
-      if (priorityA !== -1 && priorityB !== -1) {
-        if (priorityA !== priorityB) return priorityA - priorityB;
-      } else if (priorityA !== -1) {
-        return -1;
-      } else if (priorityB !== -1) {
-        return 1;
+      try {
+        const nextLive = await api.getLiveMatches().catch(() => [] as LiveMatch[]);
+        if (!cancelled) {
+          startTransition(() => setLiveMatches(Array.isArray(nextLive) ? nextLive : []));
+        }
+      } finally {
+        if (!cancelled) timer = setTimeout(() => void pollLive(), LIVE_POLL_INTERVAL_MS);
       }
+    };
 
-      // 2. Live Matches second
-      const liveStatuses = ['1H', '2H', 'HT', 'ET', 'P', 'LIVE'];
-      const isLiveA = matchesA.some(
-        (m) => liveStatuses.includes(m.status?.toUpperCase() || '') && !isMatchClosedForBetting(m)
-      );
-      const isLiveB = matchesB.some(
-        (m) => liveStatuses.includes(m.status?.toUpperCase() || '') && !isMatchClosedForBetting(m)
-      );
-      
-      if (isLiveA !== isLiveB) return isLiveA ? -1 : 1;
+    void pollLive();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
 
-      // 3. Alphabetical order for the rest
-      return keyA.localeCompare(keyB);
+  useEffect(() => {
+    if (topLeagues.length > 0) return;
+    let cancelled = false;
+    void api.getTopLeagues().then((leagues) => {
+      if (cancelled) return;
+      const list = Array.isArray(leagues) ? leagues.slice(0, 15) : [];
+      if (list.length > 0) startTransition(() => setTopLeagues(list));
     });
-  }, [displayedUpcoming]);
+    return () => {
+      cancelled = true;
+    };
+  }, [topLeagues.length]);
+
+  const groupedMatches = useMemo(
+    () => groupFixturesByLeague(displayedUpcoming),
+    [displayedUpcoming]
+  );
+
+  useEffect(() => {
+    const el = listEndRef.current;
+    if (!el || !hasMoreMatches) {
+      setShowSeeMore(false);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      ([entry]) => setShowSeeMore(entry.isIntersecting),
+      { root: null, rootMargin: '80px', threshold: 0 }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasMoreMatches, groupedMatches.length, visibleLimit]);
+
+  const handleLoadMoreMatches = () => {
+    startTransition(() => {
+      setVisibleLimit((prev) => Math.min(prev + HOME_LOAD_MORE_STEP, filteredTotalCount));
+      setShowSeeMore(false);
+    });
+  };
+
+  const remainingMatchCount = Math.min(
+    HOME_LOAD_MORE_STEP,
+    Math.max(0, filteredTotalCount - visibleLimit)
+  );
+
+  const selectDay = useCallback((dayId: string) => {
+    startTransition(() => {
+      setSelectedDay(dayId);
+      setOpenSheet(null);
+    });
+  }, []);
+
+  const selectCountry = useCallback((name: string) => {
+    startTransition(() => {
+      setSelectedCountry(name);
+      setOpenSheet(null);
+    });
+  }, []);
 
   return (
     <div className="site-shell overflow-x-hidden bg-[#0D1117] min-h-screen text-white pb-[70px]">
@@ -824,10 +826,7 @@ export default function HomePageClient({
                   {dayOptions.map((option) => (
                     <button
                       key={option.id}
-                      onClick={() => {
-                        setSelectedDay(option.id);
-                        setOpenSheet(null);
-                      }}
+                      onClick={() => selectDay(option.id)}
                       className={`flex w-full items-center justify-between px-3 py-2 text-left hover:bg-[#21262D] transition-colors ${option.id === selectedDay ? 'text-[#FF8C00]' : 'text-white'}`}
                     >
                       <span className="text-[12px] font-semibold">{option.label}</span>
@@ -853,10 +852,7 @@ export default function HomePageClient({
                   {countryOptions.map((country) => (
                     <button
                       key={country.name}
-                      onClick={() => {
-                        setSelectedCountry(country.name);
-                        setOpenSheet(null);
-                      }}
+                      onClick={() => selectCountry(country.name)}
                       className={`flex w-full items-center justify-between px-3 py-2 text-left hover:bg-[#21262D] transition-colors ${country.name === selectedCountry ? 'text-[#FF8C00]' : 'text-white'}`}
                     >
                       <div className="flex items-center gap-2 overflow-hidden">
@@ -898,7 +894,7 @@ export default function HomePageClient({
                onClick={() => { setSelectedDay('all'); setSelectedCountry('All countries'); }} 
                className="bg-[rgba(255,140,0,0.15)] border border-[rgba(255,140,0,0.3)] text-[#FF8C00] rounded-full px-3 py-1.5 text-xs font-semibold whitespace-nowrap"
              >
-               All {filteredFixtures.length}
+               All {filteredTotalCount}
              </button>
            )}
 
@@ -1044,7 +1040,16 @@ export default function HomePageClient({
            </div>
          )}
          <section className="space-y-4 pb-4">
-            {groupedMatches.length > 0 ? groupedMatches.map(([leagueName, matches]) => {
+            {(isInitialLoading ||
+              (visibleFixturesPool.length > 0 &&
+                displayedUpcoming.length === 0 &&
+                isLoadingVisibleOdds)) &&
+            groupedMatches.length === 0 ? (
+              <div className="site-card rounded-xl p-10 text-center border border-[#E2E8F0]">
+                <div className="mx-auto h-9 w-9 animate-spin rounded-full border-2 border-[#E2E8F0] border-t-[#FF8C00]" />
+                <p className="mt-4 text-sm font-semibold text-[#1A202C]">Loading matches with odds…</p>
+              </div>
+            ) : groupedMatches.length > 0 ? groupedMatches.map(([leagueName, matches]) => {
               const isCollapsed = collapsedLeagues.has(leagueName);
               const firstFixture = matches[0];
               const leagueIcon = firstFixture.league_logo || firstFixture.flag_url;
@@ -1071,7 +1076,9 @@ export default function HomePageClient({
                   </div>
                   {!isCollapsed && (
                     <div className="bg-[#E8EDF5] p-[2px] flex flex-col gap-[2px]">
-                      {matches.map((fixture, index) => {
+                      {matches
+                        .filter((fixture) => hasMatchWinnerOdds(oddsMap[fixture.id]))
+                        .map((fixture, index) => {
                         const isLive = liveFixtureIds.has(fixture.id);
                                            const renderStatus = () => {
                           const status = fixture.status?.toUpperCase() || 'NS';
@@ -1212,18 +1219,7 @@ export default function HomePageClient({
                                  );
                                }
                                if (!isFinished) {
-                                 return (
-                                   <div className="flex gap-1.5 mt-2">
-                                     {['1', 'X', '2'].map((slot) => (
-                                       <div
-                                         key={slot}
-                                         className="flex-1 rounded-md py-2 flex items-center justify-center bg-[#E2E8F0] text-[#94A3B8] text-[11px] font-bold"
-                                       >
-                                         —
-                                       </div>
-                                     ))}
-                                   </div>
-                                 );
+                                 return null;
                                }
                                return (
                                  <div className="flex gap-1.5 mt-2">
@@ -1245,10 +1241,30 @@ export default function HomePageClient({
                <div className="w-12 h-12 rounded-full bg-[#21262D] flex items-center justify-center mb-3">
                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#8B949E" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
                </div>
-               <p className="text-sm font-semibold text-white">No matches available</p>
-               <p className="text-xs text-[#8B949E] mt-1">Try changing your day or country filter.</p>
+               <p className="text-sm font-semibold text-white">No matches with odds right now</p>
+               <p className="text-xs text-[#8B949E] mt-1">Try another day or filter, or check back after the server sync finishes.</p>
              </div>
            )}
+            {groupedMatches.length > 0 && (
+              <div ref={listEndRef} className="h-1 w-full" aria-hidden />
+            )}
+            {hasMoreMatches && showSeeMore && (
+              <div className="flex justify-center pt-2 pb-1">
+                <button
+                  type="button"
+                  onClick={handleLoadMoreMatches}
+                  disabled={isLoadingVisibleOdds}
+                  className="rounded-full border border-[#FF8C00] bg-[rgba(255,140,0,0.12)] px-6 py-2.5 text-sm font-bold text-[#FF8C00] transition-colors hover:bg-[rgba(255,140,0,0.2)] disabled:opacity-60"
+                >
+                  {isLoadingVisibleOdds
+                    ? 'Loading…'
+                    : `See more (${remainingMatchCount} match${remainingMatchCount === 1 ? '' : 'es'})`}
+                </button>
+              </div>
+            )}
+            {hasMoreMatches && !showSeeMore && groupedMatches.length > 0 && (
+              <p className="text-center text-[11px] text-[#8B949E] py-2">Scroll down for more matches</p>
+            )}
         </section>
       </main>
 
@@ -1263,7 +1279,7 @@ export default function HomePageClient({
           className={`champx-nav-item ${!showLiveOnly && isSidebarOpen && sidebarFilterMode === 'all' ? 'active' : ''}`}
         >
           <svg className="champx-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path><path d="M2 12h20"></path></svg>
-          <span className="font-semibold">Sort</span>
+          <span className="font-semibold">Sport</span>
         </button>
         <button 
           onClick={() => {
@@ -1287,6 +1303,13 @@ export default function HomePageClient({
           <svg className="champx-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path></svg>
           <span className="font-semibold">Deposit</span>
         </button>
+        <Link href="/check-ticket" className="champx-nav-item">
+          <svg className="champx-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="11" cy="11" r="8" />
+            <path d="m21 21-4.35-4.35" />
+          </svg>
+          <span className="font-semibold">Check</span>
+        </Link>
         <BetSlipDrawer
           onAuthTrigger={() => {
             setAuthView('login');

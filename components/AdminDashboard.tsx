@@ -7,6 +7,7 @@ import AdminBetTickets, { type AdminBetSlip } from './AdminBetTickets';
 import type { DepositTicket } from './DepositRequests';
 import type { WithdrawalTicket } from './WithdrawalRequests';
 import AdminAccountSettings from './AdminAccountSettings';
+import AdminDepositRuleSettings from './AdminDepositRuleSettings';
 import AdminUsersManagement from './AdminUsersManagement';
 import AdminManualTicketCreator from './AdminManualTicketCreator';
 
@@ -42,6 +43,9 @@ const adminActions = [
   { id: 'users', label: 'Users', icon: (
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
   ), color: 'bg-indigo-500' },
+  { id: 'depositRule', label: 'Deposit Rule', icon: (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+  ), color: 'bg-amber-600' },
   { id: 'setting', label: 'Settings', icon: (
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
   ), color: 'bg-gray-700' },
@@ -57,6 +61,7 @@ export default function AdminDashboard({ user, onLogout, onClose }: AdminDashboa
     | 'bets'
     | 'games'
     | 'settings'
+    | 'depositRule'
     | 'support'
     | 'depositM'
     | 'withdrawalM'
@@ -184,6 +189,10 @@ export default function AdminDashboard({ user, onLogout, onClose }: AdminDashboa
     return <AdminAccountSettings user={user} onClose={() => setCurrentView('main')} />;
   }
 
+  if (currentView === 'depositRule') {
+    return <AdminDepositRuleSettings onClose={() => setCurrentView('main')} />;
+  }
+
   if (currentView === 'users') {
     return <AdminUsersManagement onClose={() => setCurrentView('main')} />;
   }
@@ -206,7 +215,7 @@ export default function AdminDashboard({ user, onLogout, onClose }: AdminDashboa
       </header>
 
       {/* Grid Content - No Scroll Layout */}
-      <main className="flex-1 grid grid-cols-2 grid-rows-4 gap-3 p-4 overflow-y-auto">
+      <main className="flex-1 grid grid-cols-2 auto-rows-fr gap-3 p-4 overflow-y-auto">
         {adminActions.map((action) => (
           <button
             key={action.id}
@@ -237,6 +246,10 @@ export default function AdminDashboard({ user, onLogout, onClose }: AdminDashboa
               }
               if (action.id === 'setting') {
                 setCurrentView('settings');
+                return;
+              }
+              if (action.id === 'depositRule') {
+                setCurrentView('depositRule');
                 return;
               }
               if (action.id === 'users') {

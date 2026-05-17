@@ -4,6 +4,7 @@ import { useState } from 'react';
 
 import { TIPICO_AUTH_SUCCESS_EVENT } from '../lib/ui-events';
 
+import { fetchWithTimeout } from '@/lib/fetch-with-timeout';
 import { getPublicApiBaseUrl } from '@/lib/public-api-url';
 
 const API_BASE = getPublicApiBaseUrl();
@@ -37,10 +38,11 @@ export default function AuthModal({ isOpen, onClose, initialView, onSuccess }: A
       const fullPhone = `+251${phoneNumber}`;
       const endpoint = view === 'login' ? 'login' : 'signup';
       
-      const response = await fetch(`${API_BASE}/auth/${endpoint}`, {
+      const response = await fetchWithTimeout(`${API_BASE}/auth/${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone: fullPhone, password }),
+        timeoutMs: 25_000,
       });
 
       const data = await response.json();

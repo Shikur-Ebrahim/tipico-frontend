@@ -329,6 +329,21 @@ export default function MatchDetailView({ initialFixture, initialOdds }: Props) 
           </svg>
           <span className="text-[10px] font-semibold">Deposit</span>
         </Link>
+        <Link href="/check-ticket" prefetch={false} className="flex flex-col items-center gap-1 text-[#8B949E] hover:text-white transition-colors">
+          <svg
+            className="w-6 h-6"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <circle cx="11" cy="11" r="8" />
+            <path d="m21 21-4.35-4.35" />
+          </svg>
+          <span className="text-[10px] font-semibold">Check</span>
+        </Link>
         <BetSlipDrawer
           onAuthTrigger={() => setIsAuthOpen(true)}
           onBetPlaced={() => setIsBetHistoryOpen(true)}
