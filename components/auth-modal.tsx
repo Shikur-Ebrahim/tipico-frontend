@@ -1,13 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { TIPICO_AUTH_SUCCESS_EVENT } from '../lib/ui-events';
-
-import { fetchWithTimeout } from '@/lib/fetch-with-timeout';
-import { getPublicApiBaseUrl } from '@/lib/public-api-url';
-
-const API_BASE = getPublicApiBaseUrl();
 
 type AuthModalProps = {
   isOpen: boolean;
@@ -22,6 +17,11 @@ export default function AuthModal({ isOpen, onClose, initialView, onSuccess }: A
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    void fetch('/api/auth/warm', { cache: 'no-store' }).catch(() => undefined);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -38,11 +38,10 @@ export default function AuthModal({ isOpen, onClose, initialView, onSuccess }: A
       const fullPhone = `+251${phoneNumber}`;
       const endpoint = view === 'login' ? 'login' : 'signup';
       
-      const response = await fetchWithTimeout(`${API_BASE}/auth/${endpoint}`, {
+      const response = await fetch(`/api/auth/${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone: fullPhone, password }),
-        timeoutMs: 25_000,
       });
 
       const data = await response.json();
@@ -67,8 +66,10 @@ export default function AuthModal({ isOpen, onClose, initialView, onSuccess }: A
       setPassword('');
       setConfirmPassword('');
       
-    } catch (err: any) {
-      alert(err.message);
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error ? err.message : 'Something went wrong. Please try again.';
+      alert(message === 'Failed to fetch' ? 'Network error. Check your connection and try again.' : message);
     } finally {
       setIsLoading(false);
     }

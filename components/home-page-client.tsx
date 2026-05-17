@@ -46,6 +46,7 @@ import { useBetSlip } from '../lib/betslip';
 import AuthModal from './auth-modal';
 import AdminDashboard from './AdminDashboard';
 import DepositModal from './DepositModal';
+import { prefetchDepositBootstrap } from '@/lib/deposit-cache';
 import TransactionHistory from './TransactionHistory';
 import AccountSettings from './AccountSettings';
 import WithdrawalModal from './WithdrawalModal';
@@ -381,6 +382,12 @@ export default function HomePageClient({
     return () => window.clearInterval(id);
   }, []);
 
+  useEffect(() => {
+    if (user?.id && typeof window !== 'undefined' && localStorage.getItem('token')) {
+      prefetchDepositBootstrap();
+    }
+  }, [user?.id]);
+
   /** Poll wallet + tab broadcast so balance updates when admin approves a deposit (no page refresh). */
   useEffect(() => {
     if (!user?.id || typeof window === 'undefined' || !localStorage.getItem('token')) return;
@@ -438,6 +445,12 @@ export default function HomePageClient({
     setIsAuthOpen(false);
   };
 
+  const primeDeposit = () => {
+    if (typeof window === 'undefined') return;
+    if (user?.id && localStorage.getItem('token')) prefetchDepositBootstrap();
+    void fetch('/api/deposit/warm', { cache: 'no-store' }).catch(() => undefined);
+  };
+
   /** Open deposit if logged in; otherwise show login and reopen deposit after successful auth. */
   const openDepositOrAskLogin = () => {
     if (typeof window === 'undefined') return;
@@ -448,6 +461,7 @@ export default function HomePageClient({
       setIsAuthOpen(true);
       return;
     }
+    primeDeposit();
     setIsDepositOpen(true);
   };
 
@@ -1343,6 +1357,7 @@ export default function HomePageClient({
           const depositQueued = openDepositAfterLoginRef.current;
           if (depositQueued) {
             openDepositAfterLoginRef.current = false;
+            primeDeposit();
             setIsDepositOpen(true);
           } else if (u.role === 'admin') {
             setShowAdminDashboard(true);
@@ -1408,6 +1423,7 @@ export default function HomePageClient({
                         </button>
                       )}
                       <button 
+                        onPointerEnter={primeDeposit}
                         onClick={() => { openDepositOrAskLogin(); setDropdownOpen(false); }}
                         className="w-full text-left px-4 py-2.5 text-sm text-[#1A202C] hover:bg-[#F1F5F9] font-semibold transition-colors flex items-center gap-2"
                       >
@@ -1448,6 +1464,7 @@ export default function HomePageClient({
                 </div>
                 <button
                   type="button"
+                  onPointerEnter={primeDeposit}
                   onClick={() => openDepositOrAskLogin()}
                   className="h-9 shrink-0 rounded-md bg-[#FF8C00] px-2.5 text-xs font-bold text-white shadow-md transition-colors hover:bg-[#E67E00] sm:px-4 sm:text-sm"
                 >
@@ -1983,6 +2000,7 @@ export default function HomePageClient({
         </button>
         <button
           type="button"
+          onPointerEnter={primeDeposit}
           onClick={() => openDepositOrAskLogin()}
           className="champx-nav-item"
         >

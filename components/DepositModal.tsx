@@ -2,19 +2,13 @@
 
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { TIPICO_DEPOSIT_PROOF_SUBMITTED_EVENT } from '@/lib/ui-events';
-
-import { getPublicApiBaseUrl } from '@/lib/public-api-url';
-
-const API_BASE = getPublicApiBaseUrl();
-
-type DepositMethod = {
-  id: number;
-  name: string;
-  logo_url: string;
-  min_amount: number;
-  account_details: string;
-  account_name: string;
-};
+import {
+  clearDepositBootstrapCache,
+  fetchDepositBootstrap,
+  getCachedDepositBootstrap,
+  prefetchDepositBootstrap,
+  type DepositMethod,
+} from '@/lib/deposit-cache';
 
 type DepositModalProps = {
   isOpen: boolean;
@@ -22,14 +16,25 @@ type DepositModalProps = {
   user: any;
 };
 
+function readCacheState() {
+  const cached = getCachedDepositBootstrap();
+  return {
+    methods: cached?.methods ?? [],
+    step: (cached?.hasPending ? 'pending' : 'amount') as 'amount' | 'details' | 'pending',
+    ready: Boolean(cached),
+  };
+}
+
 export default function DepositModal({ isOpen, onClose, user }: DepositModalProps) {
-  const [methods, setMethods] = useState<DepositMethod[]>([]);
+  const boot = useRef(readCacheState());
+  const [methods, setMethods] = useState<DepositMethod[]>(boot.current.methods);
   const [selectedMethod, setSelectedMethod] = useState<DepositMethod | null>(null);
   const [amount, setAmount] = useState('');
   const [screenshot, setScreenshot] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [step, setStep] = useState<'amount' | 'details' | 'pending'>('amount');
+  const [step, setStep] = useState<'amount' | 'details' | 'pending'>(boot.current.step);
   const [uploading, setUploading] = useState(false);
+  const [refreshing, setRefreshing] = useState(!boot.current.ready);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const fetchGenRef = useRef(0);
@@ -41,54 +46,62 @@ export default function DepositModal({ isOpen, onClose, user }: DepositModalProp
     }
   }, [error]);
 
-  const checkPendingAndFetch = useCallback(async () => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
-    if (!user?.id || !token) {
+  const applyBootstrap = useCallback((data: { hasPending: boolean; methods: DepositMethod[] }) => {
+    if (data.hasPending) {
+      setStep('pending');
       return;
     }
-    const gen = ++fetchGenRef.current;
-    try {
-      const pendingRes = await fetch(`${API_BASE}/user/pending-deposit`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const pendingData = await pendingRes.json();
-      if (fetchGenRef.current !== gen) return;
+    setMethods(data.methods);
+    setStep('amount');
+  }, []);
 
-      if (pendingData.hasPending) {
-        setStep('pending');
-        return;
+  const refreshBootstrap = useCallback(
+    async (opts?: { silent?: boolean }) => {
+      const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+      if (!user?.id || !token) return;
+
+      const gen = ++fetchGenRef.current;
+      if (!opts?.silent && !getCachedDepositBootstrap()) {
+        setRefreshing(true);
       }
 
-      const response = await fetch(`${API_BASE}/admin/deposit-methods`);
-      const methodsData = await response.json();
-      if (fetchGenRef.current !== gen) return;
-      setMethods(Array.isArray(methodsData) ? methodsData : []);
-      setStep('amount');
-    } catch (e) {
-      console.error('Failed to initialize deposit:', e);
-      if (fetchGenRef.current === gen) {
-        setError(
-          'Could not reach the API. Set NEXT_PUBLIC_API_URL to your backend (https URL on Render). Host-only is OK — /api is added automatically.'
-        );
+      try {
+        const data = await fetchDepositBootstrap();
+        if (fetchGenRef.current !== gen) return;
+        applyBootstrap(data);
+      } catch (e) {
+        console.error('Failed to load deposit:', e);
+        if (fetchGenRef.current === gen && !getCachedDepositBootstrap()) {
+          setError('Could not load deposit methods. Check your connection and try again.');
+        }
+      } finally {
+        if (fetchGenRef.current === gen) setRefreshing(false);
       }
-    }
-  }, [user?.id]);
+    },
+    [user?.id, applyBootstrap]
+  );
 
   useEffect(() => {
     if (!user?.id) {
       fetchGenRef.current += 1;
       setMethods([]);
       setStep('amount');
+      setRefreshing(false);
       return;
     }
-    void checkPendingAndFetch();
-  }, [user?.id, checkPendingAndFetch]);
 
-  /** Soft refresh when sheet opens; prefetch on user.id often finishes before first open (like Bet history). */
+    const cached = getCachedDepositBootstrap();
+    if (cached) applyBootstrap(cached);
+
+    prefetchDepositBootstrap();
+    void refreshBootstrap({ silent: Boolean(cached) });
+  }, [user?.id, applyBootstrap, refreshBootstrap]);
+
   useEffect(() => {
     if (!isOpen || !user?.id) return;
-    void checkPendingAndFetch();
-  }, [isOpen, user?.id, checkPendingAndFetch]);
+    void fetch('/api/deposit/warm', { cache: 'no-store' }).catch(() => undefined);
+    void refreshBootstrap({ silent: true });
+  }, [isOpen, user?.id, refreshBootstrap]);
 
   const minAllowedAmount = useMemo(() => {
     if (methods.length === 0) return 50;
@@ -137,7 +150,7 @@ export default function DepositModal({ isOpen, onClose, user }: DepositModalProp
       const cloudData = await cloudRes.json();
       if (!cloudData.secure_url) throw new Error('Screenshot upload failed');
 
-      const response = await fetch(`${API_BASE}/user/deposit-request`, {
+      const response = await fetch('/api/deposit/request', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -152,6 +165,7 @@ export default function DepositModal({ isOpen, onClose, user }: DepositModalProp
       });
 
       if (response.ok) {
+        clearDepositBootstrapCache();
         setStep('pending');
         window.dispatchEvent(new CustomEvent(TIPICO_DEPOSIT_PROOF_SUBMITTED_EVENT));
       } else {
@@ -173,11 +187,7 @@ export default function DepositModal({ isOpen, onClose, user }: DepositModalProp
       }`}
       aria-hidden={!isOpen}
     >
-      <div
-        className="absolute inset-0 bg-black/70 backdrop-blur-md"
-        onClick={() => isOpen && onClose()}
-        aria-hidden
-      />
+      <MotionlessBackdrop isOpen={isOpen} onClose={onClose} />
 
       <div className="relative flex h-[92vh] w-full max-w-md flex-col overflow-hidden rounded-t-[32px] bg-white shadow-2xl sm:h-auto sm:rounded-[32px]">
         <header className="flex shrink-0 items-center justify-between border-b border-gray-50 px-6 py-6">
@@ -203,9 +213,10 @@ export default function DepositModal({ isOpen, onClose, user }: DepositModalProp
                 </svg>
               </div>
               <div className="max-w-[280px] space-y-2">
-                <div className="text-xl font-black tracking-tight text-gray-900">Deposit in review</div>
+                <MotionlessPendingTitle />
                 <div className="text-sm font-medium leading-relaxed text-gray-500">
-                  You already have a deposit request waiting for verification. We will update your balance once it is approved.
+                  You already have a deposit request waiting for verification. We will update your balance once it is
+                  approved.
                 </div>
               </div>
               <button
@@ -239,28 +250,41 @@ export default function DepositModal({ isOpen, onClose, user }: DepositModalProp
 
               <div className="space-y-4">
                 <div className="ml-1 text-sm font-bold text-gray-400">Select method</div>
-                <div className="grid grid-cols-2 gap-4">
-                  {methods.map((m) => (
-                    <button
-                      key={m.id}
-                      type="button"
-                      onClick={() => {
-                        if (!amount || parseFloat(amount) < minAllowedAmount) {
-                          setError(`Please enter amount (Min: ${minAllowedAmount} ETB)`);
-                          return;
-                        }
-                        setSelectedMethod(m);
-                        setStep('details');
-                      }}
-                      className="flex flex-col items-center gap-4 rounded-[28px] border-2 border-gray-50 bg-white p-6 shadow-sm transition-all hover:border-orange-500 active:scale-95"
-                    >
-                      <div className="flex h-14 w-16 items-center justify-center">
-                        <img src={m.logo_url} alt={m.name} className="h-full w-full object-contain" />
-                      </div>
-                      <div className="text-sm font-bold tracking-tight text-gray-900">{m.name}</div>
-                    </button>
-                  ))}
-                </div>
+                {refreshing && methods.length === 0 ? (
+                  <div className="grid grid-cols-2 gap-4">
+                    {[0, 1, 2, 3].map((i) => (
+                      <div
+                        key={i}
+                        className="h-[132px] animate-pulse rounded-[28px] border-2 border-gray-50 bg-gray-100"
+                      />
+                    ))}
+                  </div>
+                ) : methods.length === 0 ? (
+                  <p className="text-center text-sm font-medium text-gray-500">No payment methods available.</p>
+                ) : (
+                  <div className="grid grid-cols-2 gap-4">
+                    {methods.map((m) => (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => {
+                          if (!amount || parseFloat(amount) < minAllowedAmount) {
+                            setError(`Please enter amount (Min: ${minAllowedAmount} ETB)`);
+                            return;
+                          }
+                          setSelectedMethod(m);
+                          setStep('details');
+                        }}
+                        className="flex flex-col items-center gap-4 rounded-[28px] border-2 border-gray-50 bg-white p-6 shadow-sm transition-all hover:border-orange-500 active:scale-95"
+                      >
+                        <div className="flex h-14 w-16 items-center justify-center">
+                          <img src={m.logo_url} alt={m.name} className="h-full w-full object-contain" />
+                        </div>
+                        <div className="text-sm font-bold tracking-tight text-gray-900">{m.name}</div>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           ) : (
@@ -272,9 +296,7 @@ export default function DepositModal({ isOpen, onClose, user }: DepositModalProp
                   </div>
                   <div>
                     <div className="text-sm font-bold tracking-tight text-gray-900">{selectedMethod?.name}</div>
-                    <div className="text-xs font-medium text-orange-600">
-                      Transfer <span className="font-bold underline">{amount} ETB</span>
-                    </div>
+                    <MotionlessTransferAmount amount={amount} />
                   </div>
                 </div>
 
@@ -384,3 +406,24 @@ export default function DepositModal({ isOpen, onClose, user }: DepositModalProp
   );
 }
 
+function MotionlessBackdrop({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
+  return (
+    <div
+      className="absolute inset-0 bg-black/70 backdrop-blur-md"
+      onClick={() => isOpen && onClose()}
+      aria-hidden
+    />
+  );
+}
+
+function MotionlessPendingTitle() {
+  return <div className="text-xl font-black tracking-tight text-gray-900">Deposit in review</div>;
+}
+
+function MotionlessTransferAmount({ amount }: { amount: string }) {
+  return (
+    <div className="text-xs font-medium text-orange-600">
+      Transfer <span className="font-bold underline">{amount} ETB</span>
+    </div>
+  );
+}
