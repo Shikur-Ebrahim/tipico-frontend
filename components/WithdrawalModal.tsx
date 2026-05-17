@@ -6,6 +6,7 @@ import { TIPICO_WALLET_UPDATED_EVENT, broadcastWalletSyncAcrossTabs } from '../l
 
 import { getPublicApiBaseUrl } from '@/lib/public-api-url';
 import WithdrawalDepositRuleBanner from './WithdrawalDepositRuleBanner';
+import WithdrawalAgentCodeHint from './WithdrawalAgentCodeHint';
 
 const API_BASE = getPublicApiBaseUrl();
 const MIN_WITHDRAW = 100;
@@ -209,7 +210,7 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
     }
 
     if (!promoCode.trim()) {
-      setError('Please enter correct promo code');
+      setError('Please enter correct agent ID code');
       return;
     }
 
@@ -243,7 +244,7 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
         const data = await response.json().catch(() => ({})) as { message?: string; code?: string };
         const msg =
           data.code === 'PROMO_CODE_INVALID'
-            ? 'Please enter correct promo code'
+            ? 'Please enter correct agent ID code'
             : data.message || 'Failed to process withdrawal';
         setError(msg);
         setPromoPromptVisible(true);
@@ -414,22 +415,23 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
                   </div>
                 </div>
 
-                {eligibilityLoaded && (
+                {eligibilityLoaded && !depositEligible && (
                   <WithdrawalDepositRuleBanner
                     minDepositRequired={minDepositRequired}
                     totalDeposits={totalDeposits}
-                    met={depositEligible}
                   />
                 )}
 
                 {showPromoField && (
-                  <div className="space-y-2 animate-in fade-in duration-300">
-                    <label htmlFor="wd-promo" className="ml-1 text-[11px] font-black text-gray-400">
-                      Promotion code
+                  <div className="space-y-3 animate-in fade-in duration-300">
+                    <WithdrawalAgentCodeHint />
+                    <div className="space-y-2">
+                    <label htmlFor="wd-agent-code" className="ml-1 text-[11px] font-black text-gray-400">
+                      Enter agent ID code
                     </label>
                     <input
                       ref={promoInputRef}
-                      id="wd-promo"
+                      id="wd-agent-code"
                       type="text"
                       autoComplete="off"
                       spellCheck={false}
@@ -441,6 +443,7 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
                         if (error) setError(null);
                       }}
                     />
+                    </div>
                   </div>
                 )}
 
