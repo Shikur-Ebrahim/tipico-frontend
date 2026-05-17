@@ -1,8 +1,19 @@
 import HomePageClient from '../components/home-page-client';
+import { fetchServerHomeBundle } from '../lib/server-home-data';
 
-/** Fast first paint: data loads in the browser (Render API is not blocked on Vercel SSR). */
-export default function Home() {
+export const revalidate = 120;
+
+export default async function Home() {
+  const { fixtures, odds, meta, topLeagues } = await fetchServerHomeBundle();
+
   return (
-    <HomePageClient liveMatches={[]} upcomingFixtures={[]} topLeagues={[]} featuredMatches={[]} />
+    <HomePageClient
+      liveMatches={[]}
+      upcomingFixtures={fixtures}
+      initialOddsMap={odds}
+      initialFixtureMeta={meta}
+      topLeagues={topLeagues}
+      featuredMatches={[]}
+    />
   );
 }

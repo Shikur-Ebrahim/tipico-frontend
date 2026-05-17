@@ -6,6 +6,7 @@ import {
   useCallback,
   useDeferredValue,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -19,6 +20,11 @@ import {
   orderFixturesForHomeList,
 } from '../lib/home-fixture-list';
 import { isMatchClosedForBetting } from '../lib/match-status';
+import {
+  homeFeedCacheKey,
+  peekHomeFeedCache,
+  writeHomeFeedCache,
+} from '../lib/home-feed-cache';
 import BetSlipDrawer from './BetSlipDrawer';
 import { useBetSlip } from '../lib/betslip';
 import AuthModal from './auth-modal';
@@ -50,6 +56,8 @@ type CountryOption = {
 type HomePageClientProps = {
   liveMatches: LiveMatch[];
   upcomingFixtures: Fixture[];
+  initialOddsMap?: Record<number, Odd[]>;
+  initialFixtureMeta?: FixtureMeta | null;
   topLeagues: League[];
   featuredMatches: FeaturedMatch[];
 };
@@ -165,17 +173,24 @@ function isInSelectedDayRange(fixture: Fixture, dayId: string) {
 export default function HomePageClient({
   liveMatches: initialLiveMatches,
   upcomingFixtures: initialUpcomingFixtures,
+  initialOddsMap = {},
+  initialFixtureMeta = null,
   topLeagues: initialTopLeagues,
   featuredMatches: _initialFeaturedMatches,
 }: HomePageClientProps) {
   const [liveMatches, setLiveMatches] = useState<LiveMatch[]>(initialLiveMatches);
   const [upcomingFixtures, setUpcomingFixtures] = useState<Fixture[]>(initialUpcomingFixtures);
-  const [fixtureMeta, setFixtureMeta] = useState<FixtureMeta | null>(null);
+  const [fixtureMeta, setFixtureMeta] = useState<FixtureMeta | null>(initialFixtureMeta);
   const [topLeagues, setTopLeagues] = useState<League[]>(initialTopLeagues);
-  const [oddsMap, setOddsMap] = useState<Record<number, Odd[]>>({});
+  const [oddsMap, setOddsMap] = useState<Record<number, Odd[]>>(initialOddsMap);
   const [isInitialLoading, setIsInitialLoading] = useState(
     () => initialUpcomingFixtures.length === 0
   );
+  const filterCacheKey = (
+    day: string,
+    country: string,
+    leagueId: number | null
+  ) => homeFeedCacheKey(day, country, leagueId);
   const [activeTab, setActiveTab] = useState<'highlights' | 'upcoming' | 'countries'>('upcoming');
   const [selectedDay, setSelectedDay] = useState('all');
   const [selectedCountry, setSelectedCountry] = useState('All countries');
@@ -211,6 +226,12 @@ export default function HomePageClient({
   const [visibleLimit, setVisibleLimit] = useState(HOME_INITIAL_VISIBLE);
   const [isLoadingVisibleOdds, setIsLoadingVisibleOdds] = useState(false);
   const fixtureFetchGenRef = useRef(0);
+  const fixtureMetaRef = useRef(fixtureMeta);
+  const upcomingFixturesRef = useRef(upcomingFixtures);
+  const oddsMapRef = useRef(oddsMap);
+  fixtureMetaRef.current = fixtureMeta;
+  upcomingFixturesRef.current = upcomingFixtures;
+  oddsMapRef.current = oddsMap;
 
   const scrollCarousel = (dir: 'left' | 'right') => {
     if (carouselRef.current) {
@@ -464,8 +485,22 @@ export default function HomePageClient({
     [orderedFilteredFixtures, visibleLimit]
   );
 
+  const loadedForFilterCount = orderedFilteredFixtures.length;
   const hasMoreMatches =
-    !showLiveOnly && !deferredMainSearch.trim() && visibleLimit < filteredTotalCount;
+    !showLiveOnly &&
+    !deferredMainSearch.trim() &&
+    visibleLimit < filteredTotalCount;
+
+  const apiFetchLimit = useMemo(() => {
+    if (showLiveOnly) return Math.min(400, fixtureMeta?.total ?? 400);
+    let cap = fixtureMeta?.total ?? FIXTURE_LIST_LIMIT;
+    if (selectedCountry !== 'All countries') {
+      cap = fixtureMeta?.countries.find((c) => c.name === selectedCountry)?.count ?? cap;
+    } else if (selectedDay !== 'all') {
+      cap = fixtureMeta?.days.find((d) => d.id === selectedDay)?.count ?? cap;
+    }
+    return Math.min(Math.max(1, cap), FIXTURE_LIST_LIMIT);
+  }, [showLiveOnly, selectedDay, selectedCountry, fixtureMeta]);
 
   /** List rows from API (has_odds); 1X2 lines load in the background per row. */
   const displayedUpcoming = visibleFixturesPool;
@@ -488,17 +523,6 @@ export default function HomePageClient({
     () => carouselFixtures.slice(0, 10).map((f) => f.id),
     [carouselFixtures]
   );
-
-  const listFetchParams = useMemo(() => {
-    const params: NonNullable<Parameters<typeof api.getFixtures>[0]> = {
-      limit: visibleLimit,
-      has_odds: true,
-    };
-    if (selectedDay !== 'all') params.day = selectedDay;
-    if (selectedCountry !== 'All countries') params.country = selectedCountry;
-    if (selectedLeagueId !== null) params.api_league_id = selectedLeagueId;
-    return params;
-  }, [visibleLimit, selectedDay, selectedCountry, selectedLeagueId]);
 
   const oddsMapRef = useRef(oddsMap);
   oddsMapRef.current = oddsMap;
@@ -547,58 +571,122 @@ export default function HomePageClient({
     };
   }, [oddsTargetIds]);
 
-  const loadFixtureList = useCallback(async () => {
-    const gen = ++fixtureFetchGenRef.current;
-    const dayCap =
-      selectedDay !== 'all'
-        ? fixtureMeta?.days.find((d) => d.id === selectedDay)?.count
-        : undefined;
-    const countryCap =
-      selectedCountry !== 'All countries'
-        ? fixtureMeta?.countries.find((c) => c.name === selectedCountry)?.count
-        : undefined;
-    const totalCap = countryCap ?? dayCap ?? fixtureMeta?.total ?? FIXTURE_LIST_LIMIT;
-    const fetchLimit = showLiveOnly
-      ? Math.min(400, visibleLimit)
-      : Math.min(visibleLimit, totalCap);
-    try {
-      let feed = await api.getHomeFeed({
-        limit: fetchLimit,
-        day: selectedDay !== 'all' ? selectedDay : undefined,
-        country: selectedCountry !== 'All countries' ? selectedCountry : undefined,
-        api_league_id: selectedLeagueId ?? undefined,
-      });
-      if (gen !== fixtureFetchGenRef.current) return;
+  const applyFeedToState = useCallback(
+    (fixtures: Fixture[], odds: Record<number, Odd[]>) => {
+      setUpcomingFixtures(fixtures);
+      if (Object.keys(odds).length > 0) {
+        setOddsMap((prev) => ({ ...prev, ...odds }));
+      }
+      writeHomeFeedCache(
+        filterCacheKey(selectedDay, selectedCountry, selectedLeagueId),
+        fixtures,
+        odds,
+        fixtureMetaRef.current
+      );
+    },
+    [selectedDay, selectedCountry, selectedLeagueId]
+  );
 
-      if (feed.fixtures.length === 0) {
-        const fixtures = await api.getFixtures({
+  const loadFixtureList = useCallback(
+    async (opts?: { background?: boolean }) => {
+      const background = opts?.background === true;
+      const gen = ++fixtureFetchGenRef.current;
+      const fetchLimit = apiFetchLimit;
+      try {
+        let feed = await api.getHomeFeed({
           limit: fetchLimit,
-          has_odds: true,
           day: selectedDay !== 'all' ? selectedDay : undefined,
           country: selectedCountry !== 'All countries' ? selectedCountry : undefined,
           api_league_id: selectedLeagueId ?? undefined,
         });
         if (gen !== fixtureFetchGenRef.current) return;
-        feed = { fixtures, odds: {} };
-      }
 
-      startTransition(() => {
-        setUpcomingFixtures(feed.fixtures);
-        if (Object.keys(feed.odds).length > 0) {
-          setOddsMap((prev) => ({ ...prev, ...feed.odds }));
+        if (feed.fixtures.length === 0) {
+          const fixtures = await api.getFixtures({
+            limit: fetchLimit,
+            has_odds: true,
+            day: selectedDay !== 'all' ? selectedDay : undefined,
+            country: selectedCountry !== 'All countries' ? selectedCountry : undefined,
+            api_league_id: selectedLeagueId ?? undefined,
+          });
+          if (gen !== fixtureFetchGenRef.current) return;
+          feed = { fixtures, odds: {} };
         }
-      });
-    } finally {
-      if (gen === fixtureFetchGenRef.current) {
-        setIsInitialLoading(false);
+
+        const apply = () => applyFeedToState(feed.fixtures, feed.odds);
+        if (background) startTransition(apply);
+        else apply();
+      } finally {
+        if (gen === fixtureFetchGenRef.current) {
+          setIsInitialLoading(false);
+        }
       }
+    },
+    [apiFetchLimit, showLiveOnly, selectedDay, selectedCountry, selectedLeagueId, applyFeedToState]
+  );
+
+  const hydrateFromCache = useCallback(
+    (day: string, country: string, leagueId: number | null) => {
+      const cached = peekHomeFeedCache(filterCacheKey(day, country, leagueId));
+      if (!cached?.fixtures.length) return false;
+      setUpcomingFixtures(cached.fixtures);
+      setOddsMap((prev) => ({ ...prev, ...cached.odds }));
+      if (cached.meta) setFixtureMeta(cached.meta);
+      setIsInitialLoading(false);
+      return true;
+    },
+    []
+  );
+
+  useLayoutEffect(() => {
+    if (initialUpcomingFixtures.length > 0) {
+      writeHomeFeedCache(
+        filterCacheKey('all', 'All countries', null),
+        initialUpcomingFixtures,
+        initialOddsMap,
+        initialFixtureMeta
+      );
+      return;
     }
-  }, [visibleLimit, showLiveOnly, selectedDay, selectedCountry, selectedLeagueId, fixtureMeta?.total]);
+    hydrateFromCache(selectedDay, selectedCountry, selectedLeagueId);
+  }, []);
 
   useEffect(() => {
+    const cacheKey = filterCacheKey(selectedDay, selectedCountry, selectedLeagueId);
+    const cached = peekHomeFeedCache(cacheKey);
+    if (cached?.fixtures.length) {
+      setUpcomingFixtures(cached.fixtures);
+      setOddsMap((prev) => ({ ...prev, ...cached.odds }));
+      if (cached.meta) setFixtureMeta(cached.meta);
+      setIsInitialLoading(false);
+      void loadFixtureList({ background: true });
+      return;
+    }
+    if (upcomingFixtures.length > 0) {
+      setIsInitialLoading(false);
+      void loadFixtureList({ background: true });
+      return;
+    }
     setIsInitialLoading(true);
     void loadFixtureList();
-  }, [loadFixtureList]);
+  }, [loadFixtureList, selectedDay, selectedCountry, selectedLeagueId]);
+
+  /** Load remaining rows for this filter so "See more" only reveals +50 locally. */
+  useEffect(() => {
+    if (showLiveOnly || deferredMainSearch.trim()) return;
+    const target = apiFetchLimit;
+    if (target <= HOME_INITIAL_VISIBLE) return;
+    if (upcomingFixturesRef.current.length >= target) return;
+    void loadFixtureList({ background: true });
+  }, [
+    apiFetchLimit,
+    showLiveOnly,
+    deferredMainSearch,
+    selectedDay,
+    selectedCountry,
+    selectedLeagueId,
+    loadFixtureList,
+  ]);
 
   useEffect(() => {
     if (!isInitialLoading) return;
@@ -615,7 +703,20 @@ export default function HomePageClient({
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           const meta = await api.getFixturesMeta({ has_odds: true });
-          if (!cancelled && meta) startTransition(() => setFixtureMeta(meta));
+          if (!cancelled && meta) {
+            startTransition(() => {
+              setFixtureMeta(meta);
+              const fixtures = upcomingFixturesRef.current;
+              if (fixtures.length > 0) {
+                writeHomeFeedCache(
+                  filterCacheKey(selectedDay, selectedCountry, selectedLeagueId),
+                  fixtures,
+                  oddsMapRef.current,
+                  meta
+                );
+              }
+            });
+          }
           return;
         } catch {
           if (attempt < 2) await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
@@ -623,7 +724,11 @@ export default function HomePageClient({
       }
     };
 
-    void loadMeta();
+    if (!initialFixtureMeta) {
+      void loadMeta();
+    } else {
+      window.setTimeout(() => void loadMeta(), 8_000);
+    }
     metaTimer = setInterval(() => void loadMeta(), META_REFRESH_INTERVAL_MS);
 
     return () => {
@@ -857,31 +962,55 @@ export default function HomePageClient({
   );
 
   const handleLoadMoreMatches = () => {
-    startTransition(() => {
-      setVisibleLimit((prev) => Math.min(prev + HOME_LOAD_MORE_STEP, filteredTotalCount));
-    });
+    const next = Math.min(visibleLimit + HOME_LOAD_MORE_STEP, filteredTotalCount);
+    setVisibleLimit(next);
+    if (
+      next > loadedForFilterCount &&
+      next <= filteredTotalCount &&
+      loadedForFilterCount < apiFetchLimit
+    ) {
+      void loadFixtureList({ background: true });
+    }
   };
 
   const selectDay = useCallback((dayId: string) => {
+    const cached = peekHomeFeedCache(filterCacheKey(dayId, 'All countries', null));
     startTransition(() => {
       setSelectedDay(dayId);
       setSelectedCountry('All countries');
       setOpenSheet(null);
-      setUpcomingFixtures([]);
-      setIsInitialLoading(true);
       setVisibleLimit(HOME_INITIAL_VISIBLE);
+      if (cached?.fixtures.length) {
+        setUpcomingFixtures(cached.fixtures);
+        setOddsMap((prev) => ({ ...prev, ...cached.odds }));
+        if (cached.meta) setFixtureMeta(cached.meta);
+        setIsInitialLoading(false);
+      } else {
+        setUpcomingFixtures([]);
+        setIsInitialLoading(true);
+      }
     });
   }, []);
 
   const selectCountry = useCallback((name: string) => {
+    const cached = peekHomeFeedCache(
+      filterCacheKey(selectedDay, name, null)
+    );
     startTransition(() => {
       setSelectedCountry(name);
       setOpenSheet(null);
-      setUpcomingFixtures([]);
-      setIsInitialLoading(true);
       setVisibleLimit(HOME_INITIAL_VISIBLE);
+      if (cached?.fixtures.length) {
+        setUpcomingFixtures(cached.fixtures);
+        setOddsMap((prev) => ({ ...prev, ...cached.odds }));
+        if (cached.meta) setFixtureMeta(cached.meta);
+        setIsInitialLoading(false);
+      } else {
+        setUpcomingFixtures([]);
+        setIsInitialLoading(true);
+      }
     });
-  }, []);
+  }, [selectedDay]);
 
   return (
     <div className="site-shell overflow-x-hidden bg-[#0D1117] min-h-screen text-white pb-[70px]">
@@ -1496,10 +1625,9 @@ export default function HomePageClient({
                 <button
                   type="button"
                   onClick={handleLoadMoreMatches}
-                  disabled={isLoadingVisibleOdds}
-                  className="rounded-full border border-[#FF8C00] bg-[rgba(255,140,0,0.12)] px-8 py-2.5 text-sm font-bold text-[#FF8C00] transition-colors hover:bg-[rgba(255,140,0,0.2)] disabled:opacity-60"
+                  className="rounded-full border border-[#FF8C00] bg-[rgba(255,140,0,0.12)] px-8 py-2.5 text-sm font-bold text-[#FF8C00] transition-colors hover:bg-[rgba(255,140,0,0.2)]"
                 >
-                  {isLoadingVisibleOdds ? 'Loading…' : 'See more'}
+                  See more
                 </button>
               </div>
             )}

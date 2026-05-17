@@ -4,7 +4,7 @@ import { isMatchClosedForBetting } from './match-status';
 /** Matches shown on first paint (frontend window only). */
 export const HOME_INITIAL_VISIBLE = 100;
 
-/** Extra matches loaded per "See more" click. */
+/** Extra matches revealed per "See more" click (client-side, no refetch). */
 export const HOME_LOAD_MORE_STEP = 50;
 
 const TOP_LEAGUE_PRIORITY = [
