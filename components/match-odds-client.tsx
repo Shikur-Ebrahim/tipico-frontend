@@ -1,9 +1,67 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Odd, Fixture } from '../lib/api';
 import { isMatchClosedForBetting } from '../lib/match-status';
 import { useBetSlip } from '../lib/betslip';
+
+/** Markets expanded on first load; all others stay collapsed until the user opens them. */
+function isDefaultExpandedMarket(marketName: string): boolean {
+  const m = marketName.toLowerCase().trim();
+  if (m === 'match winner' || m.includes('full time result')) return true;
+  if (m === 'home/away') return true;
+  if (m.includes('second half winner')) return true;
+  if (m === 'asian handicap' || m.startsWith('asian handicap ')) return true;
+  if (m === 'goals over/under') return true;
+  if (
+    m.includes('goals over/under') &&
+    !m.includes('first half') &&
+    !m.includes('second half')
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function buildDefaultCollapsedMarkets(marketNames: string[]): Set<string> {
+  const collapsed = new Set<string>();
+  for (const name of marketNames) {
+    if (!isDefaultExpandedMarket(name)) collapsed.add(name);
+  }
+  return collapsed;
+}
+
+const DEFAULT_EXPANDED_ORDER = [
+  'match winner',
+  'home/away',
+  'second half winner',
+  'asian handicap',
+  'goals over/under',
+];
+
+function defaultExpandedSortRank(marketName: string): number {
+  const m = marketName.toLowerCase();
+  for (let i = 0; i < DEFAULT_EXPANDED_ORDER.length; i++) {
+    const key = DEFAULT_EXPANDED_ORDER[i];
+    if (key === 'goals over/under') {
+      if (m === 'goals over/under' || (m.includes('goals over/under') && !m.includes('first half') && !m.includes('second half'))) {
+        return i;
+      }
+    } else if (m.includes(key)) {
+      return i;
+    }
+  }
+  return DEFAULT_EXPANDED_ORDER.length;
+}
+
+function sortMarketsForDisplay(entries: [string, Odd[]][]): [string, Odd[]][] {
+  return [...entries].sort(([a], [b]) => {
+    const rankA = defaultExpandedSortRank(a);
+    const rankB = defaultExpandedSortRank(b);
+    if (rankA !== rankB) return rankA - rankB;
+    return a.localeCompare(b);
+  });
+}
 
 type MatchOddsClientProps = {
   odds: Odd[];
@@ -53,12 +111,38 @@ export default function MatchOddsClient({ odds, fixture }: MatchOddsClientProps)
     markets.get(odd.market_name)!.push(odd);
   }
 
-  const marketNames = Array.from(markets.keys());
-  const displayedMarkets = activeTab === 'All'
-    ? Array.from(markets.entries())
-    : Array.from(markets.entries()).filter(([name]) => name === activeTab);
+  const marketNames = useMemo(() => Array.from(markets.keys()), [odds]);
+  const displayedMarkets = useMemo(() => {
+    const entries =
+      activeTab === 'All'
+        ? Array.from(markets.entries())
+        : Array.from(markets.entries()).filter(([name]) => name === activeTab);
+    return activeTab === 'All' ? sortMarketsForDisplay(entries) : entries;
+  }, [activeTab, odds]);
 
-  const [collapsedMarkets, setCollapsedMarkets] = useState<Set<string>>(new Set());
+  const [collapsedMarkets, setCollapsedMarkets] = useState<Set<string>>(() => new Set());
+  const collapsedInitRef = useRef(false);
+
+  useEffect(() => {
+    if (collapsedInitRef.current || marketNames.length === 0) return;
+    collapsedInitRef.current = true;
+    setCollapsedMarkets(buildDefaultCollapsedMarkets(marketNames));
+  }, [marketNames]);
+
+  useEffect(() => {
+    if (!collapsedInitRef.current || marketNames.length === 0) return;
+    setCollapsedMarkets((prev) => {
+      let changed = false;
+      const next = new Set(prev);
+      for (const name of marketNames) {
+        if (!prev.has(name) && !isDefaultExpandedMarket(name)) {
+          next.add(name);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [marketNames]);
 
   const toggleMarket = (marketName: string) => {
     setCollapsedMarkets(prev => {
