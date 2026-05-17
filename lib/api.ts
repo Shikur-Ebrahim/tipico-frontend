@@ -331,9 +331,13 @@ export const api = {
       return null;
     }
   },
-  getFixture: async (id: number) => {
+  getFixture: async (id: number, opts?: { refresh?: boolean }) => {
+    const bust = opts?.refresh ? `?_=${Date.now()}` : '';
     try {
-      return await fetchAPI<Fixture>(`/fixtures/${id}`, { timeoutMs: 12_000 });
+      return await fetchAPI<Fixture>(`/fixtures/${id}${bust}`, {
+        timeoutMs: 12_000,
+        cache: opts?.refresh ? 'no-store' : undefined,
+      });
     } catch {
       return null;
     }
@@ -361,6 +365,7 @@ export const api = {
     try {
       const rows = await fetchAPI<Odd[]>(`/odds/fixture/${fixtureId}${bust}`, {
         timeoutMs: 12_000,
+        cache: opts?.refresh ? 'no-store' : undefined,
       });
       return Array.isArray(rows) ? rows : [];
     } catch {

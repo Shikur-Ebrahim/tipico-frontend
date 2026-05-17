@@ -23,20 +23,26 @@ export async function GET(
   }
 
   const bust = req.nextUrl.searchParams.get('_');
-  const url = `${backendBase()}/odds/fixture/${fixtureId}${bust ? `?_=${bust}` : ''}`;
+  const refresh = req.nextUrl.searchParams.get('refresh');
+  const qs = new URLSearchParams();
+  if (refresh) qs.set('refresh', refresh);
+  if (bust) qs.set('_', bust);
+  const query = qs.toString();
+  const url = `${backendBase()}/odds/fixture/${fixtureId}${query ? `?${query}` : ''}`;
+  const liveRefresh = refresh === '1' || Boolean(bust);
 
   try {
     const upstream = await fetch(url, {
       headers: { Accept: 'application/json' },
-      ...(bust ? { cache: 'no-store' as const } : { next: { revalidate: 15 } }),
+      ...(liveRefresh ? { cache: 'no-store' as const } : { next: { revalidate: 15 } }),
     });
     const body = await upstream.text();
     return new NextResponse(body, {
       status: upstream.ok ? 200 : upstream.status,
       headers: {
         'Content-Type': 'application/json',
-        'Cache-Control': bust
-          ? 'private, no-cache'
+        'Cache-Control': liveRefresh
+          ? 'private, no-cache, no-store'
           : 'public, s-maxage=15, stale-while-revalidate=60',
       },
     });

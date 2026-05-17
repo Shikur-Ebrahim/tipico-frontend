@@ -126,9 +126,9 @@ export default function MatchDetailView({ initialFixture, initialOdds, oddsLoadi
       const id = fixtureIdRef.current;
       let nextDelay = 30_000;
       try {
-        // DB-backed only: backend sync jobs write API-Football data; we re-read via GET.
+        // Re-read from DB; backend cron updates odds from API-Football every ~30s.
         const [nextFixture, nextOdds] = await Promise.all([
-          api.getFixture(id),
+          api.getFixture(id, { refresh: true }),
           api.getOdds(id, { refresh: true }),
         ]);
         if (!cancelled && nextFixture) {

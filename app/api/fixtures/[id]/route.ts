@@ -13,7 +13,7 @@ function backendBase(): string {
 }
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
   const { id } = await context.params;
@@ -22,19 +22,28 @@ export async function GET(
     return NextResponse.json({ error: 'Invalid fixture id' }, { status: 400 });
   }
 
-  const url = `${backendBase()}/fixtures/${fixtureId}`;
+  const bust = req.nextUrl.searchParams.get('_');
+  const refresh = req.nextUrl.searchParams.get('refresh');
+  const qs = new URLSearchParams();
+  if (refresh) qs.set('refresh', refresh);
+  if (bust) qs.set('_', bust);
+  const query = qs.toString();
+  const liveRefresh = refresh === '1' || Boolean(bust);
+  const url = `${backendBase()}/fixtures/${fixtureId}${query ? `?${query}` : ''}`;
+
   try {
     const upstream = await fetch(url, {
       headers: { Accept: 'application/json' },
-      next: { revalidate: 15 },
+      ...(liveRefresh ? { cache: 'no-store' as const } : { next: { revalidate: 15 } }),
     });
     const body = await upstream.text();
     return new NextResponse(body, {
       status: upstream.status,
       headers: {
         'Content-Type': 'application/json',
-        'Cache-Control':
-          upstream.ok
+        'Cache-Control': liveRefresh
+          ? 'private, no-cache, no-store'
+          : upstream.ok
             ? 'public, s-maxage=15, stale-while-revalidate=60'
             : 'public, s-maxage=5',
       },

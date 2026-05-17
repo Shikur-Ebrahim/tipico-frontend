@@ -171,7 +171,7 @@ export default function MatchOddsClient({ odds, fixture, oddsLoading = false }: 
       <div className="sticky top-14 z-30 bg-[#0D1117] pt-4 pb-3">
         {isLiveInPlay ? (
           <p className="mb-2 px-1 text-[10px] font-medium uppercase tracking-wide text-[#16A34A]/90">
-            Live odds refresh ~30s — prices follow the server database
+            Live odds update ~30s — backend syncs to database, page reads latest prices
           </p>
         ) : null}
         <div className="relative">
