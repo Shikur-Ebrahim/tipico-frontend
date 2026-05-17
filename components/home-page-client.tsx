@@ -132,9 +132,40 @@ function getSelectionName(selection: string, fixture: Fixture) {
   return selection;
 }
 
-/** Live scores / in-play list only (lightweight). */
-const LIVE_POLL_INTERVAL_MS = 45_000;
+/** Live scores + odds — aligned with backend 30s sync. */
+const LIVE_POLL_INTERVAL_MS = 30_000;
 const LIVE_SIDEBAR_STATUSES = ['1H', '2H', 'HT', 'ET', 'P', 'LIVE'];
+
+function liveMatchToFixture(m: LiveMatch): Fixture {
+  return {
+    id: m.fixture_id,
+    league_id: 0,
+    home_team_id: 0,
+    away_team_id: 0,
+    match_date: m.match_date,
+    status: m.status,
+    minute: m.minute,
+    home_score: m.home_score,
+    away_score: m.away_score,
+    home_team_name: m.home_team_name,
+    home_team_logo: m.home_team_logo,
+    away_team_name: m.away_team_name,
+    away_team_logo: m.away_team_logo,
+    league_name: m.league_name,
+    league_logo: m.league_logo || '',
+    api_league_id: m.api_league_id,
+    country_name: m.country_name || '',
+    flag_url: m.flag_url || '',
+    venue_name: '',
+    venue_city: '',
+    referee: '',
+  };
+}
+
+function isLiveInPlay(match: { status?: string; minute?: number }) {
+  const st = match.status?.toUpperCase() || '';
+  return LIVE_SIDEBAR_STATUSES.includes(st) && !isMatchClosedForBetting(match);
+}
 /** Dropdown counts from DB (no full fixture payload). */
 const META_REFRESH_INTERVAL_MS = 180_000;
 
@@ -264,6 +295,44 @@ export default function HomePageClient({
   fixtureMetaRef.current = fixtureMeta;
   upcomingFixturesRef.current = upcomingFixtures;
   oddsMapRef.current = oddsMap;
+
+  const refreshOddsForFixtureIds = useCallback(async (fixtureIds: number[]) => {
+    const ids = [...new Set(fixtureIds.filter((id) => Number.isFinite(id) && id > 0))];
+    if (ids.length === 0) return;
+    const CHUNK = 80;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const chunk = ids.slice(i, i + CHUNK);
+      const part = await api.getOddsBulk(chunk).catch(() => ({} as Record<number, Odd[]>));
+      startTransition(() => {
+        setOddsMap((prev) => {
+          const next = { ...prev };
+          for (const [key, rows] of Object.entries(part)) {
+            const fid = Number(key);
+            if (Number.isFinite(fid) && hasMatchWinnerOdds(rows)) next[fid] = rows;
+          }
+          return next;
+        });
+      });
+    }
+  }, []);
+
+  const mergeLiveScoresIntoFixtures = useCallback((matches: LiveMatch[]) => {
+    if (matches.length === 0) return;
+    const byId = new Map(matches.map((m) => [m.fixture_id, m]));
+    setUpcomingFixtures((prev) =>
+      prev.map((f) => {
+        const lm = byId.get(f.id);
+        if (!lm) return f;
+        return {
+          ...f,
+          status: lm.status,
+          minute: lm.minute,
+          home_score: lm.home_score,
+          away_score: lm.away_score,
+        };
+      })
+    );
+  }, []);
 
   const scrollCarousel = (dir: 'left' | 'right') => {
     if (carouselRef.current) {
@@ -480,13 +549,16 @@ export default function HomePageClient({
   }, [countryOptions, selectedCountry]);
 
   const filteredFixtures = useMemo(() => {
-    const LIVE_STATUSES = ['1H', '2H', 'HT', 'ET', 'P', 'LIVE'];
     let pool = showLiveOnly
-      ? upcomingFixtures.filter((f) => {
-          const st = f.status?.toUpperCase() || '';
-          if (!LIVE_STATUSES.includes(st)) return false;
-          return !isMatchClosedForBetting(f);
-        })
+      ? (() => {
+          const fromFeed = upcomingFixtures.filter((f) => isLiveInPlay(f));
+          const seen = new Set(fromFeed.map((f) => f.id));
+          const fromLive = liveMatches
+            .filter((m) => m.is_active && isLiveInPlay(m))
+            .filter((m) => !seen.has(m.fixture_id))
+            .map(liveMatchToFixture);
+          return [...fromFeed, ...fromLive];
+        })()
       : upcomingFixtures;
 
     if (selectedDay !== 'all') {
@@ -509,7 +581,7 @@ export default function HomePageClient({
       );
     }
     return pool;
-  }, [upcomingFixtures, showLiveOnly, deferredMainSearch, selectedDay, selectedCountry]);
+  }, [upcomingFixtures, liveMatches, showLiveOnly, deferredMainSearch, selectedDay, selectedCountry]);
 
   const orderedFilteredFixtures = useMemo(
     () => orderFixturesForHomeList(filteredFixtures),
@@ -997,8 +1069,20 @@ export default function HomePageClient({
       }
       try {
         const nextLive = await api.getLiveMatches().catch(() => [] as LiveMatch[]);
+        const rows = Array.isArray(nextLive) ? nextLive : [];
         if (!cancelled) {
-          startTransition(() => setLiveMatches(Array.isArray(nextLive) ? nextLive : []));
+          startTransition(() => setLiveMatches(rows));
+          mergeLiveScoresIntoFixtures(rows);
+          const liveIds = rows
+            .filter((m) => m.is_active && isLiveInPlay(m))
+            .map((m) => m.fixture_id);
+          const feedLiveIds = upcomingFixturesRef.current
+            .filter((f) => isLiveInPlay(f))
+            .map((f) => f.id);
+          const oddsIds = [...new Set([...liveIds, ...feedLiveIds])];
+          if (oddsIds.length > 0) {
+            await refreshOddsForFixtureIds(oddsIds);
+          }
         }
       } finally {
         if (!cancelled) timer = setTimeout(() => void pollLive(), LIVE_POLL_INTERVAL_MS);
@@ -1010,7 +1094,22 @@ export default function HomePageClient({
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, []);
+  }, [mergeLiveScoresIntoFixtures, refreshOddsForFixtureIds]);
+
+  const loadFixtureListRef = useRef(loadFixtureList);
+  loadFixtureListRef.current = loadFixtureList;
+
+  useEffect(() => {
+    if (!showLiveOnly) return;
+    void api.getLiveMatches().then((rows) => {
+      if (!Array.isArray(rows) || rows.length === 0) return;
+      startTransition(() => setLiveMatches(rows));
+      mergeLiveScoresIntoFixtures(rows);
+      const ids = rows.filter((m) => m.is_active && isLiveInPlay(m)).map((m) => m.fixture_id);
+      if (ids.length > 0) void refreshOddsForFixtureIds(ids);
+    });
+    void loadFixtureListRef.current({ background: true });
+  }, [showLiveOnly, mergeLiveScoresIntoFixtures, refreshOddsForFixtureIds]);
 
   const fetchTopLeagues = useCallback(async () => {
     let list = await api.getTopLeagues();

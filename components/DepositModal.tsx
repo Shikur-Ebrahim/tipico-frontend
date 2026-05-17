@@ -383,3 +383,4 @@ export default function DepositModal({ isOpen, onClose, user }: DepositModalProp
     </div>
   );
 }
+

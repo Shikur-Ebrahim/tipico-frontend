@@ -342,7 +342,9 @@ export const api = {
 
   getLiveMatches: async () => {
     try {
-      return await fetchAPI<LiveMatch[]>('/live/matches');
+      return await fetchAPI<LiveMatch[]>(`/live/matches?_=${Date.now()}`, {
+        cache: 'no-store',
+      });
     } catch {
       return [];
     }
@@ -371,7 +373,10 @@ export const api = {
     const ids = [...new Set(fixtureIds.filter((id) => Number.isFinite(id) && id > 0))].slice(0, 120);
     if (ids.length === 0) return {};
     const qs = `ids=${ids.join(',')}&_=${Date.now()}`;
-    const raw = await fetchAPI<Record<string, Odd[]>>(`/odds/bulk?${qs}`, { timeoutMs: 45_000 });
+    const raw = await fetchAPI<Record<string, Odd[]>>(`/odds/bulk?${qs}`, {
+      timeoutMs: 45_000,
+      cache: 'no-store',
+    });
     const out: Record<number, Odd[]> = {};
     for (const [key, rows] of Object.entries(raw || {})) {
       const id = parseInt(key, 10);
