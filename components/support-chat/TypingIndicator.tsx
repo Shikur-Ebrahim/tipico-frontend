@@ -20,13 +20,13 @@ export default function TypingIndicator() {
   return (
     <div className="flex items-end gap-2">
       <div
-        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#21262D] text-[#FF8C00]"
+        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-green-100 to-green-200 text-green-700 ring-1 ring-green-300/60"
         aria-hidden
       >
         <SupportBotIcon className="h-4 w-4" />
       </div>
       <div
-        className="rounded-2xl rounded-bl-md border border-[#30363D] bg-[#21262D] px-4 py-3"
+        className="rounded-2xl rounded-bl-md border border-green-200 bg-white px-4 py-3 shadow-sm"
         role="status"
         aria-label="Assistant is typing"
       >
@@ -34,7 +34,7 @@ export default function TypingIndicator() {
           {[0, 150, 300].map((delay) => (
             <span
               key={delay}
-              className="h-2 w-2 animate-bounce rounded-full bg-[#8B949E]"
+              className="h-2 w-2 animate-bounce rounded-full bg-green-500"
               style={{ animationDelay: `${delay}ms`, animationDuration: '0.9s' }}
             />
           ))}

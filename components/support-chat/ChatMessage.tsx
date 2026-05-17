@@ -15,7 +15,7 @@ type ChatMessageProps = {
 function BotAvatar() {
   return (
     <div
-      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#21262D] text-[#FF8C00]"
+      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-green-100 to-green-200 text-green-700 ring-1 ring-green-300/60"
       aria-hidden
     >
       <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
@@ -45,8 +45,8 @@ export default function ChatMessage({ message }: ChatMessageProps) {
       <p
         className={`max-w-[82%] whitespace-pre-wrap break-words px-3.5 py-2.5 text-[13px] leading-relaxed sm:max-w-[78%] sm:text-sm ${
           isUser
-            ? 'rounded-2xl rounded-br-md bg-gradient-to-br from-[#FF8C00] to-[#E67E00] font-medium text-[#0D1117] shadow-md shadow-[#FF8C00]/20'
-            : 'rounded-2xl rounded-bl-md border border-[#30363D] bg-[#21262D] text-[#E6EDF3]'
+            ? 'rounded-2xl rounded-br-md bg-gradient-to-br from-green-500 to-green-700 font-medium text-white shadow-md shadow-green-600/25'
+            : 'rounded-2xl rounded-bl-md border border-green-200 bg-white text-slate-700 shadow-sm'
         }`}
       >
         {message.content}
