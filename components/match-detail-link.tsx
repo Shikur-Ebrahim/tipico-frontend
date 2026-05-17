@@ -5,9 +5,10 @@ import type { ComponentProps } from 'react';
 import type { Fixture, Odd } from '../lib/api';
 import { prefetchMatchDetailOdds, writeMatchDetailCache } from '../lib/match-detail-cache';
 
-type Props = ComponentProps<typeof Link> & {
+type Props = Omit<ComponentProps<typeof Link>, 'href'> & {
   fixture: Fixture;
   odds?: Odd[];
+  href?: ComponentProps<typeof Link>['href'];
 };
 
 export default function MatchDetailLink({ fixture, odds = [], href, onPointerEnter, onPointerDown, ...rest }: Props) {
