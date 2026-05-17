@@ -19,6 +19,7 @@ const AdminDepositRuleSettings = dynamic(() => import('./AdminDepositRuleSetting
 const AdminTelegramSettings = dynamic(() => import('./AdminTelegramSettings'));
 const AdminUsersManagement = dynamic(() => import('./AdminUsersManagement'));
 const AdminManualTicketCreator = dynamic(() => import('./AdminManualTicketCreator'));
+const AdminPromoCodeGenerator = dynamic(() => import('./AdminPromoCodeGenerator'));
 
 type AdminDashboardProps = {
   user: any;
@@ -51,6 +52,9 @@ const adminActions = [
   { id: 'depositRule', label: 'Deposit Rule', icon: (
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
   ), color: 'bg-amber-600' },
+  { id: 'promo', label: 'Promo', icon: (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 12v8H4v-8"/><path d="M12 3l8 4H4l8-4z"/><path d="M12 11v6"/><path d="M9 14h6"/></svg>
+  ), color: 'bg-pink-500' },
   { id: 'telegram', label: 'Telegram', icon: (
     <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71L12.6 16.3l-1.99 1.93c-.23.23-.42.42-.83.42z"/></svg>
   ), color: 'bg-sky-500' },
@@ -75,6 +79,7 @@ export default function AdminDashboard({ user, onLogout, onClose }: AdminDashboa
     | 'withdrawalM'
     | 'tickets'
     | 'createBet'
+    | 'promo'
   >('main');
   const [pendingCount, setPendingCount] = useState(0);
   const [pendingWithdrawalCount, setPendingWithdrawalCount] = useState(0);
@@ -255,6 +260,10 @@ export default function AdminDashboard({ user, onLogout, onClose }: AdminDashboa
     return <AdminManualTicketCreator onClose={() => setCurrentView('main')} />;
   }
 
+  if (currentView === 'promo') {
+    return <AdminPromoCodeGenerator onClose={() => setCurrentView('main')} />;
+  }
+
   return (
     <div className="fixed inset-0 z-[150] bg-white text-[#1A202C] flex flex-col h-screen overflow-hidden">
       {/* Top Header */}
@@ -312,6 +321,10 @@ export default function AdminDashboard({ user, onLogout, onClose }: AdminDashboa
               }
               if (action.id === 'createBet') {
                 setCurrentView('createBet');
+                return;
+              }
+              if (action.id === 'promo') {
+                setCurrentView('promo');
                 return;
               }
             }}

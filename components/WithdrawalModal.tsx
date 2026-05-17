@@ -54,6 +54,9 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
   const [amount, setAmount] = useState('');
   const [accountName, setAccountName] = useState('');
   const [accountDetails, setAccountDetails] = useState('');
+  const [promoCode, setPromoCode] = useState('');
+  const [promoPromptVisible, setPromoPromptVisible] = useState(false);
+  const promoInputRef = useRef<HTMLInputElement>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [methodsLoading, setMethodsLoading] = useState(false);
@@ -61,7 +64,8 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
   const [hasPending, setHasPending] = useState(false);
   const [pendingSummary, setPendingSummary] = useState<string | null>(null);
   const [history, setHistory] = useState<HistoryRow[]>([]);
-  const [depositEligible, setDepositEligible] = useState(true);
+  const [depositEligible, setDepositEligible] = useState(false);
+  const [eligibilityLoaded, setEligibilityLoaded] = useState(false);
   const [totalDeposits, setTotalDeposits] = useState(0);
   const [minDepositRequired, setMinDepositRequired] = useState(6665);
   const methodsRef = useRef<WithdrawalMethod[]>([]);
@@ -92,10 +96,12 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
       setHasPending(false);
       setPendingSummary(null);
       setHistory([]);
-      setDepositEligible(true);
+      setDepositEligible(false);
+      setEligibilityLoaded(false);
       return;
     }
     const gen = ++userStateGenRef.current;
+    setEligibilityLoaded(false);
     setHistoryLoading(true);
     try {
       const [pendRes, histRes, eligRes] = await Promise.all([
@@ -128,7 +134,10 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
         setHistory([]);
       }
     } finally {
-      if (userStateGenRef.current === gen) setHistoryLoading(false);
+      if (userStateGenRef.current === gen) {
+        setHistoryLoading(false);
+        setEligibilityLoaded(true);
+      }
     }
   }, [user?.id]);
 
@@ -148,6 +157,8 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
     setAmount('');
     setAccountName('');
     setAccountDetails('');
+    setPromoCode('');
+    setPromoPromptVisible(false);
     setSelectedMethod(null);
     setError(null);
     setStep('selection');
@@ -156,6 +167,10 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
   }, [isOpen, user?.id, fetchMethods, loadUserWithdrawalState]);
 
   const handleMethodSelect = (method: WithdrawalMethod) => {
+    if (eligibilityLoaded && !depositEligible) {
+      setError(null);
+      return;
+    }
     const val = parseFloat(amount);
     if (!Number.isFinite(val) || val < MIN_WITHDRAW) {
       setError(`Enter at least ${MIN_WITHDRAW} ETB`);
@@ -170,6 +185,12 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
     setStep('details');
   };
 
+  useEffect(() => {
+    if (!promoPromptVisible) return;
+    const t = window.setTimeout(() => promoInputRef.current?.focus(), 50);
+    return () => clearTimeout(t);
+  }, [promoPromptVisible]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!depositEligible) {
@@ -178,6 +199,17 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
     }
     if (!accountName?.trim() || !accountDetails?.trim()) {
       setError('Please fill all details');
+      return;
+    }
+
+    if (depositEligible && !promoPromptVisible) {
+      setPromoPromptVisible(true);
+      setError(null);
+      return;
+    }
+
+    if (!promoCode.trim()) {
+      setError('Please enter correct promo code');
       return;
     }
 
@@ -197,6 +229,7 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
           amount: parseFloat(amount),
           accountName,
           accountDetails,
+          promoCode: promoCode.trim().toUpperCase(),
         }),
       });
 
@@ -207,8 +240,13 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
         setPendingSummary(`${amount} ETB · ${selectedMethod?.name || 'Withdrawal'} — processing`);
         void loadUserWithdrawalState();
       } else {
-        const data = await response.json().catch(() => ({}));
-        setError((data as { message?: string }).message || 'Failed to process withdrawal');
+        const data = await response.json().catch(() => ({})) as { message?: string; code?: string };
+        const msg =
+          data.code === 'PROMO_CODE_INVALID'
+            ? 'Please enter correct promo code'
+            : data.message || 'Failed to process withdrawal';
+        setError(msg);
+        setPromoPromptVisible(true);
       }
     } catch {
       setError('Connection error');
@@ -220,6 +258,8 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
   if (!user?.id) return null;
 
   const showMethodsSkeleton = step === 'selection' && methodsLoading && methods.length === 0;
+  const showPromoField =
+    promoPromptVisible && eligibilityLoaded && depositEligible && step === 'details' && !hasPending;
 
   return (
     <div
@@ -319,6 +359,13 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
                   )}
                 </div>
 
+                {eligibilityLoaded && !depositEligible && (
+                  <WithdrawalDepositRuleBanner
+                    minDepositRequired={minDepositRequired}
+                    totalDeposits={totalDeposits}
+                  />
+                )}
+
                 {error && (
                   <div className="rounded-[18px] bg-red-50 p-4 text-center text-[10px] font-black text-red-500">{error}</div>
                 )}
@@ -367,11 +414,34 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
                   </div>
                 </div>
 
-                {!depositEligible && (
+                {eligibilityLoaded && (
                   <WithdrawalDepositRuleBanner
                     minDepositRequired={minDepositRequired}
                     totalDeposits={totalDeposits}
+                    met={depositEligible}
                   />
+                )}
+
+                {showPromoField && (
+                  <div className="space-y-2 animate-in fade-in duration-300">
+                    <label htmlFor="wd-promo" className="ml-1 text-[11px] font-black text-gray-400">
+                      Promotion code
+                    </label>
+                    <input
+                      ref={promoInputRef}
+                      id="wd-promo"
+                      type="text"
+                      autoComplete="off"
+                      spellCheck={false}
+                      maxLength={10}
+                      className="w-full rounded-[20px] border-2 border-transparent bg-white px-5 py-4 font-mono text-lg font-black uppercase tracking-wider text-gray-900 shadow-sm ring-1 ring-slate-200 outline-none transition-all focus:border-orange-500 focus:ring-orange-200"
+                      value={promoCode}
+                      onChange={(e) => {
+                        setPromoCode(e.target.value.toUpperCase());
+                        if (error) setError(null);
+                      }}
+                    />
+                  </div>
                 )}
 
                 {error && depositEligible && (
@@ -388,7 +458,12 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
                   </button>
                   <button
                     type="button"
-                    onClick={() => setStep('selection')}
+                    onClick={() => {
+                      setPromoPromptVisible(false);
+                      setPromoCode('');
+                      setError(null);
+                      setStep('selection');
+                    }}
                     className="w-full py-2 text-[10px] font-black uppercase tracking-widest text-gray-400"
                   >
                     Back
