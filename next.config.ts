@@ -4,6 +4,15 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       {
+        source: '/api/home-bootstrap',
+        headers: [
+          {
+            key: 'Cache-Control',
+            value: 'public, s-maxage=60, stale-while-revalidate=180',
+          },
+        ],
+      },
+      {
         source: '/api/home-feed',
         headers: [
           {

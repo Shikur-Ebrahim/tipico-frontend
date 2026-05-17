@@ -41,46 +41,41 @@ export async function fetchServerHomeBundle(): Promise<ServerHomeBundle> {
   const limit = HOME_INITIAL_VISIBLE;
 
   try {
-    const [homeRes, summaryRes, leaguesRes] = await Promise.all([
-      fetchWithTimeout(`${base}/fixtures/home?limit=${limit}`, {
-        headers: { 'Content-Type': 'application/json' },
-        next: { revalidate: 120 },
-        timeoutMs: 8_000,
-      }),
-      fetchWithTimeout(`${base}/fixtures/meta/summary?has_odds=1`, {
-        headers: { 'Content-Type': 'application/json' },
-        next: { revalidate: 120 },
-        timeoutMs: 8_000,
-      }),
-      fetchWithTimeout(`${base}/leagues/top`, {
-        headers: { 'Content-Type': 'application/json' },
-        next: { revalidate: 300 },
-        timeoutMs: 8_000,
-      }),
-    ]);
+    const bootstrapRes = await fetchWithTimeout(`${base}/fixtures/bootstrap?limit=${limit}`, {
+      headers: { 'Content-Type': 'application/json' },
+      next: { revalidate: 60 },
+      timeoutMs: 12_000,
+    });
+
+    if (bootstrapRes.ok) {
+      const boot = (await bootstrapRes.json()) as {
+        fixtures?: Fixture[];
+        odds?: unknown;
+        meta?: FixtureMeta;
+        topLeagues?: League[];
+      };
+      const fixtures = Array.isArray(boot.fixtures) ? boot.fixtures : [];
+      const odds = parseOddsMap(boot.odds);
+      const meta = boot.meta?.days?.length ? boot.meta : null;
+      const topLeagues = Array.isArray(boot.topLeagues) ? boot.topLeagues.slice(0, 15) : [];
+      return { fixtures, odds, meta, topLeagues };
+    }
+
+    const summaryRes = await fetchWithTimeout(`${base}/fixtures/meta/summary?has_odds=1`, {
+      headers: { 'Content-Type': 'application/json' },
+      next: { revalidate: 120 },
+      timeoutMs: 8_000,
+    });
 
     let fixtures: Fixture[] = [];
     let odds: Record<number, Odd[]> = {};
-
-    if (homeRes.ok) {
-      const home = (await homeRes.json()) as { fixtures?: Fixture[]; odds?: unknown };
-      fixtures = Array.isArray(home.fixtures) ? home.fixtures : [];
-      odds = parseOddsMap(home.odds);
-    }
-
-    let topLeagues: League[] = [];
-    if (leaguesRes.ok) {
-      const rows = await leaguesRes.json();
-      topLeagues = Array.isArray(rows) ? rows.slice(0, 15) : [];
-    }
-
     let meta: FixtureMeta | null = null;
     if (summaryRes.ok) {
       const summary = (await summaryRes.json()) as FixtureDayCounts;
       if (summary?.days?.length) meta = metaFromDayCounts(summary);
     }
 
-    return { fixtures, odds, meta, topLeagues };
+    return { fixtures, odds, meta, topLeagues: [] };
   } catch {
     return emptyServerHomeBundle();
   }

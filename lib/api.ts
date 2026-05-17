@@ -52,11 +52,17 @@ export type FixtureMeta = {
 export type FixtureDayCounts = {
   total: number;
   days: { id: string; count: number }[];
+  countries?: { name: string; count: number; flag_url: string | null }[];
 };
 
 export type HomeFeedResponse = {
   fixtures: Fixture[];
   odds: Record<string, Odd[]>;
+};
+
+export type HomeBootstrapResponse = HomeFeedResponse & {
+  meta: FixtureMeta;
+  topLeagues: League[];
 };
 
 export interface Fixture {
@@ -272,6 +278,36 @@ export const api = {
       return { fixtures, odds: oddsOut };
     } catch {
       return { fixtures: [] as Fixture[], odds: {} as Record<number, Odd[]> };
+    }
+  },
+  /** Landing page bundle: matches + 7-day meta + countries + top leagues (one call). */
+  getHomeBootstrap: async (limit?: number) => {
+    const search = new URLSearchParams();
+    if (limit) search.set('limit', String(limit));
+    const qs = search.toString();
+    const path = `/fixtures/bootstrap${qs ? `?${qs}` : ''}`;
+    try {
+      const raw = await fetchAPI<HomeBootstrapResponse>(path, { timeoutMs: 12_000 });
+      const fixtures = Array.isArray(raw?.fixtures) ? raw.fixtures : [];
+      const odds = raw?.odds && typeof raw.odds === 'object' ? raw.odds : {};
+      const oddsOut: Record<number, Odd[]> = {};
+      for (const [key, rows] of Object.entries(odds)) {
+        const id = parseInt(key, 10);
+        if (Number.isFinite(id) && Array.isArray(rows)) oddsOut[id] = rows;
+      }
+      return {
+        fixtures,
+        odds: oddsOut,
+        meta: raw?.meta ?? null,
+        topLeagues: Array.isArray(raw?.topLeagues) ? raw.topLeagues : [],
+      };
+    } catch {
+      return {
+        fixtures: [] as Fixture[],
+        odds: {} as Record<number, Odd[]>,
+        meta: null,
+        topLeagues: [] as League[],
+      };
     }
   },
   /** Fast DB counts for day dropdown (target under 5s). */

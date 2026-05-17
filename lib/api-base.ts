@@ -8,6 +8,10 @@ export function resolveApiUrl(path: string): string {
   const normalized = path.startsWith('/') ? path : `/${path}`;
 
   if (typeof window !== 'undefined') {
+    if (normalized.startsWith('/fixtures/bootstrap')) {
+      const qs = normalized.includes('?') ? normalized.slice(normalized.indexOf('?')) : '';
+      return `/api/home-bootstrap${qs}`;
+    }
     if (normalized.startsWith('/fixtures/home')) {
       const qs = normalized.includes('?') ? normalized.slice(normalized.indexOf('?')) : '';
       return `/api/home-feed${qs}`;

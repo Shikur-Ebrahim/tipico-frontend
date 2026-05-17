@@ -18,11 +18,14 @@ import {
   HOME_INITIAL_VISIBLE,
   HOME_LOAD_MORE_STEP,
   orderFixturesForHomeList,
+  pickCarouselFixtures,
 } from '../lib/home-fixture-list';
 import { isMatchClosedForBetting } from '../lib/match-status';
 import {
   consumeHomeFeedPrefetch,
+  hasSeededHomeBootstrap,
   peekHomeBootstrap,
+  seedHomeBootstrapFromServer,
   startHomeFeedPrefetch,
 } from '../lib/home-bootstrap';
 import {
@@ -35,10 +38,6 @@ import {
 
 const PREFETCH_TOP_COUNTRIES = 12;
 import { mergeDayCountsIntoMeta } from '../lib/fixture-meta-utils';
-
-if (typeof window !== 'undefined') {
-  startHomeFeedPrefetch();
-}
 import BetSlipDrawer from './BetSlipDrawer';
 import { useBetSlip } from '../lib/betslip';
 import AuthModal from './auth-modal';
@@ -130,7 +129,6 @@ function getSelectionName(selection: string, fixture: Fixture) {
   return selection;
 }
 
-const CAROUSEL_ACTIVE_STATUSES = ['NS', 'TBD', '1H', '2H', 'HT', 'ET', 'P', 'LIVE'];
 /** Live scores / in-play list only (lightweight). */
 const LIVE_POLL_INTERVAL_MS = 45_000;
 const LIVE_SIDEBAR_STATUSES = ['1H', '2H', 'HT', 'ET', 'P', 'LIVE'];
@@ -213,8 +211,12 @@ export default function HomePageClient({
     return {};
   });
   const [listFetchSettled, setListFetchSettled] = useState(
-    () => initialUpcomingFixtures.length > 0
+    () =>
+      initialUpcomingFixtures.length > 0 &&
+      Boolean(initialFixtureMeta?.days?.length)
   );
+  const ssrBundleReady =
+    initialUpcomingFixtures.length > 0 && Boolean(initialFixtureMeta?.days?.length);
   const filterCacheKey = (
     day: string,
     country: string,
@@ -430,9 +432,10 @@ export default function HomePageClient({
         selectedDay !== 'all'
           ? fixtureMeta.days.find((d) => d.id === selectedDay)?.count ?? fixtureMeta.total
           : fixtureMeta.total;
+      const countries = fixtureMeta.countries.filter((c) => c.name !== 'All countries');
       return [
         { name: 'All countries', count: allCount, flagUrl: null },
-        ...fixtureMeta.countries.map((c) => ({
+        ...countries.map((c) => ({
           name: c.name,
           count: c.count,
           flagUrl: c.flag_url,
@@ -542,17 +545,18 @@ export default function HomePageClient({
 
   const liveFixtureIds = useMemo(() => new Set(liveMatches.map((match) => match.fixture_id)), [liveMatches]);
 
-  const [carouselFixtures, setCarouselFixtures] = useState<Fixture[]>([]);
+  const [carouselFixtures, setCarouselFixtures] = useState<Fixture[]>(() =>
+    pickCarouselFixtures(initialUpcomingFixtures)
+  );
 
-  const featuredForCarousel = useMemo(() => {
-    return carouselFixtures
-      .filter((f) => hasMatchWinnerOdds(oddsMap[f.id]))
-      .slice(0, 10)
-      .map((fixture) => ({
+  const featuredForCarousel = useMemo(
+    () =>
+      carouselFixtures.slice(0, 10).map((fixture) => ({
         fixture,
         odds: oddsMap[fixture.id] ?? [],
-      }));
-  }, [carouselFixtures, oddsMap]);
+      })),
+    [carouselFixtures, oddsMap]
+  );
 
   const carouselFixtureIds = useMemo(
     () => carouselFixtures.slice(0, 10).map((f) => f.id),
@@ -699,7 +703,41 @@ export default function HomePageClient({
   );
 
   useLayoutEffect(() => {
+    if (ssrBundleReady) {
+      seedHomeBootstrapFromServer({
+        fixtures: initialUpcomingFixtures,
+        odds: initialOddsMap,
+        meta: initialFixtureMeta,
+        topLeagues: initialTopLeagues,
+      });
+      writeHomeFeedCache(
+        filterCacheKey('all', 'All countries', null),
+        initialUpcomingFixtures,
+        initialOddsMap,
+        initialFixtureMeta
+      );
+      setListFetchSettled(true);
+      const deferRefresh = () => {
+        if (hasSeededHomeBootstrap()) void loadFixtureList({ background: true });
+      };
+      if (typeof requestIdleCallback !== 'undefined') {
+        const id = requestIdleCallback(deferRefresh, { timeout: 8000 });
+        return () => cancelIdleCallback(id);
+      }
+      const t = window.setTimeout(deferRefresh, 5000);
+      return () => window.clearTimeout(t);
+    }
+
     startHomeFeedPrefetch();
+
+    const hasCountryList = initialFixtureMeta?.countries?.some(
+      (c) => c.name !== 'All countries'
+    );
+    if (!hasCountryList && !ssrBundleReady) {
+      void api.getFixturesMeta({ has_odds: true }).then((meta) => {
+        if (meta?.countries?.length) setFixtureMeta(meta);
+      });
+    }
 
     if (!initialFixtureMeta?.days?.length) {
       void api.getFixturesDayCounts().then((counts) => {
@@ -778,7 +816,7 @@ export default function HomePageClient({
   useEffect(() => {
     if (!fixtureMeta?.countries?.length) return;
     const topCountries = fixtureMeta.countries
-      .filter((c) => c.name !== 'All countries' && c.count > 0)
+      .filter((c) => c.name !== 'All countries' && (c.count ?? 0) > 0)
       .sort((a, b) => b.count - a.count)
       .slice(0, PREFETCH_TOP_COUNTRIES)
       .map((c) => c.name);
@@ -849,7 +887,9 @@ export default function HomePageClient({
       }
     };
 
-    void loadMeta();
+    if (!ssrBundleReady) {
+      void loadMeta();
+    }
     metaTimer = setInterval(() => void loadMeta(), META_REFRESH_INTERVAL_MS);
 
     const onBootstrapMeta = (e: Event) => {
@@ -880,10 +920,22 @@ export default function HomePageClient({
           day: selectedDay,
         });
         if (!cancelled && meta) {
+          const countries = meta.countries.filter((c) => c.name !== 'All countries');
+          const allCount = countries.reduce((sum, c) => sum + (c.count || 0), 0);
           startTransition(() =>
             setFixtureMeta((prev) =>
               prev
-                ? { ...prev, countries: meta.countries }
+                ? {
+                    ...prev,
+                    countries: [
+                      {
+                        name: 'All countries',
+                        count: allCount || prev.total,
+                        flag_url: null,
+                      },
+                      ...countries,
+                    ],
+                  }
                 : meta
             )
           );
@@ -899,23 +951,30 @@ export default function HomePageClient({
   }, [selectedDay]);
 
   useEffect(() => {
+    if (carouselFixtures.length > 0) return;
+    const picked = pickCarouselFixtures(upcomingFixtures);
+    if (picked.length > 0) {
+      setCarouselFixtures(picked);
+      return;
+    }
     let cancelled = false;
     void api
-      .getFixtures({ limit: 12, has_odds: true })
-      .then((rows) => {
+      .getHomeFeed({ limit: 12 })
+      .then((feed) => {
         if (cancelled) return;
-        const list = Array.isArray(rows) ? rows : [];
-        startTransition(() =>
-          setCarouselFixtures(
-            list.filter((f) => CAROUSEL_ACTIVE_STATUSES.includes((f.status || '').toUpperCase()))
-          )
-        );
+        const pickedFeed = pickCarouselFixtures(feed.fixtures);
+        if (pickedFeed.length > 0) {
+          setCarouselFixtures(pickedFeed);
+          if (Object.keys(feed.odds).length > 0) {
+            setOddsMap((prev) => ({ ...prev, ...feed.odds }));
+          }
+        }
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [carouselFixtures.length, upcomingFixtures]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1474,8 +1533,11 @@ export default function HomePageClient({
               {featuredForCarousel.map(({ fixture, odds }) => (
                 <Link key={fixture.id} href={`/matches/${fixture.id}`} className="site-card rounded-xl p-3.5 min-w-[280px] shrink-0 flex flex-col gap-3">
                   <div className="flex justify-between items-center">
-                    <span className="text-[10px] text-[#FF8C00] font-bold bg-[rgba(255,140,0,0.12)] px-2 py-1 rounded">
-                      {isMounted ? formatMatchDate(fixture.match_date) : ''}
+                    <span
+                      className="text-[10px] text-[#FF8C00] font-bold bg-[rgba(255,140,0,0.12)] px-2 py-1 rounded"
+                      suppressHydrationWarning
+                    >
+                      {formatMatchDate(fixture.match_date)}
                     </span>
                     <span className="text-[10px] text-[#8B949E] uppercase font-bold tracking-tight">
                       {fixture.country_name ? `${fixture.country_name}: ` : ''}{fixture.league_name}

@@ -1,4 +1,4 @@
-import { api, type Fixture, type FixtureMeta, type Odd } from './api';
+import { api, type Fixture, type FixtureMeta, type League, type Odd } from './api';
 import { mergeDayCountsIntoMeta, metaFromDayCounts } from './fixture-meta-utils';
 import { HOME_INITIAL_VISIBLE } from './home-fixture-list';
 import {
@@ -15,12 +15,14 @@ export type HomeBootstrapSnapshot = {
   fixtures: Fixture[];
   odds: Record<number, Odd[]>;
   meta: FixtureMeta | null;
+  topLeagues?: League[];
 };
 
 const DEFAULT_KEY = homeFeedCacheKey('all', 'All countries', null);
 
 let memorySnapshot: HomeBootstrapSnapshot | null = null;
 let prefetchPromise: Promise<HomeBootstrapSnapshot> | null = null;
+let seededFromServer = false;
 
 function snapshotFromCache(): HomeBootstrapSnapshot | null {
   const cached = peekHomeFeedCache(DEFAULT_KEY);
@@ -32,70 +34,70 @@ function snapshotFromCache(): HomeBootstrapSnapshot | null {
   };
 }
 
-/** Call as early as possible on the client so fetch runs during JS parse. */
+/** Hydrate client cache from SSR props — instant first paint, no duplicate fetch. */
+export function seedHomeBootstrapFromServer(snap: HomeBootstrapSnapshot): void {
+  if (typeof window === 'undefined' || seededFromServer) return;
+  if (!snap.fixtures.length) return;
+  seededFromServer = true;
+  memorySnapshot = snap;
+  writeHomeFeedCache(DEFAULT_KEY, snap.fixtures, snap.odds, snap.meta);
+  prefetchPromise = Promise.resolve(snap);
+  scheduleWarmCaches(snap.meta);
+}
+
+export function hasSeededHomeBootstrap(): boolean {
+  return seededFromServer;
+}
+
+function scheduleWarmCaches(meta: FixtureMeta | null): void {
+  if (!meta) return;
+  const dayIds = meta.days?.map((d) => d.id).filter((id) => id !== 'all') ?? [];
+  if (dayIds.length) {
+    prefetchHomeDayFeeds(dayIds, HOME_INITIAL_VISIBLE, (day) =>
+      api.getHomeFeed({ limit: HOME_INITIAL_VISIBLE, day })
+    );
+  }
+  const topCountries = (meta.countries ?? [])
+    .filter((c) => c.name !== 'All countries' && c.count > 0)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, PREFETCH_TOP_COUNTRIES)
+    .map((c) => c.name);
+  if (topCountries.length) {
+    prefetchHomeCountryFeeds('all', topCountries, HOME_INITIAL_VISIBLE, (params) =>
+      api.getHomeFeed({ limit: HOME_INITIAL_VISIBLE, ...params })
+    );
+  }
+}
+
+/** Call when SSR did not provide data — single bootstrap API call. */
 export function startHomeFeedPrefetch(): void {
   if (typeof window === 'undefined') return;
-  if (prefetchPromise) return;
+  if (prefetchPromise || seededFromServer) return;
 
   const fromCache = snapshotFromCache();
   if (fromCache) {
     memorySnapshot = fromCache;
+    prefetchPromise = Promise.resolve(fromCache);
+    scheduleWarmCaches(fromCache.meta);
     return;
   }
 
   prefetchPromise = (async () => {
-    const feed = await api.getHomeFeed({ limit: HOME_INITIAL_VISIBLE });
+    const boot = await api.getHomeBootstrap(HOME_INITIAL_VISIBLE);
     const snap: HomeBootstrapSnapshot = {
-      fixtures: feed.fixtures,
-      odds: feed.odds,
-      meta: null,
+      fixtures: boot.fixtures,
+      odds: boot.odds,
+      meta: boot.meta,
+      topLeagues: boot.topLeagues,
     };
     if (snap.fixtures.length > 0) {
-      writeHomeFeedCache(DEFAULT_KEY, snap.fixtures, snap.odds, null);
+      writeHomeFeedCache(DEFAULT_KEY, snap.fixtures, snap.odds, snap.meta);
       memorySnapshot = snap;
+      if (snap.meta) {
+        window.dispatchEvent(new CustomEvent('tipico:home-meta', { detail: snap.meta }));
+      }
+      scheduleWarmCaches(snap.meta);
     }
-    prefetchHomeDayFeeds(['today', 'tomorrow'], HOME_INITIAL_VISIBLE, (day) =>
-      api.getHomeFeed({ limit: HOME_INITIAL_VISIBLE, day })
-    );
-    void api.getFixturesDayCounts().then((counts) => {
-      if (!counts?.days?.length) return;
-      const partial = metaFromDayCounts(counts);
-      const base = memorySnapshot;
-      if (base?.fixtures.length) {
-        memorySnapshot = { ...base, meta: partial };
-        writeHomeFeedCache(DEFAULT_KEY, base.fixtures, base.odds, partial);
-      }
-      window.dispatchEvent(new CustomEvent('tipico:home-meta', { detail: partial }));
-    });
-    void api.getFixturesMeta({ has_odds: true }).then((meta) => {
-      if (!meta?.total) return;
-      const base = memorySnapshot;
-      const merged = base?.meta
-        ? mergeDayCountsIntoMeta(base.meta, { total: meta.total, days: meta.days })
-        : meta;
-      const full = { ...meta, days: merged.days, total: merged.total };
-      if (base?.fixtures.length) {
-        memorySnapshot = { ...base, meta: full };
-        writeHomeFeedCache(DEFAULT_KEY, base.fixtures, base.odds, full);
-      }
-      window.dispatchEvent(new CustomEvent('tipico:home-meta', { detail: full }));
-      const dayIds = full.days?.map((d) => d.id).filter((id) => id !== 'all') ?? [];
-      if (dayIds.length) {
-        prefetchHomeDayFeeds(dayIds, HOME_INITIAL_VISIBLE, (day) =>
-          api.getHomeFeed({ limit: HOME_INITIAL_VISIBLE, day })
-        );
-      }
-      const topCountries = full.countries
-        .filter((c) => c.name !== 'All countries' && c.count > 0)
-        .sort((a, b) => b.count - a.count)
-        .slice(0, PREFETCH_TOP_COUNTRIES)
-        .map((c) => c.name);
-      if (topCountries.length) {
-        prefetchHomeCountryFeeds('all', topCountries, HOME_INITIAL_VISIBLE, (params) =>
-          api.getHomeFeed({ limit: HOME_INITIAL_VISIBLE, ...params })
-        );
-      }
-    });
     return snap;
   })();
 }
