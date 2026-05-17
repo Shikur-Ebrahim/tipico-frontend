@@ -103,6 +103,7 @@ async function writeClipboard(text: string): Promise<boolean> {
 
 export default function BetHistory({ isOpen, onClose, user }: BetHistoryProps) {
   const [bets, setBets] = useState<BetSlip[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<'all' | 'pending' | 'won' | 'lost'>('all');
   const [copiedBetId, setCopiedBetId] = useState<number | null>(null);
@@ -134,6 +135,7 @@ export default function BetHistory({ isOpen, onClose, user }: BetHistoryProps) {
     const userId = user?.id;
     if (userId == null) {
       setBets([]);
+      setLoadError(null);
       setLoading(false);
       return;
     }
@@ -143,11 +145,13 @@ export default function BetHistory({ isOpen, onClose, user }: BetHistoryProps) {
     try {
       const data = await api.getBetHistory(userId);
       if (fetchGenRef.current !== gen) return;
-      setBets(Array.isArray(data) ? data : []);
+      setBets(Array.isArray(data) ? (data as BetSlip[]) : []);
+      setLoadError(null);
     } catch (err) {
       console.error('Failed to fetch history:', err);
       if (fetchGenRef.current !== gen) return;
       setBets([]);
+      setLoadError(err instanceof Error ? err.message : 'Could not load bet history');
     } finally {
       if (fetchGenRef.current === gen) setLoading(false);
     }
@@ -255,6 +259,20 @@ export default function BetHistory({ isOpen, onClose, user }: BetHistoryProps) {
           {loading && bets.length === 0 ? (
             <div className="flex h-48 items-center justify-center">
               <div className="h-9 w-9 animate-spin rounded-full border-2 border-slate-200 border-t-orange-500" />
+            </div>
+          ) : loadError ? (
+            <div className="flex flex-col items-center justify-center gap-3 py-16 text-center px-4">
+              <p className="text-sm font-medium text-red-600">{loadError}</p>
+              <p className="text-xs text-slate-500">
+                If this keeps happening, log out and back in, or try again in a moment.
+              </p>
+              <button
+                type="button"
+                onClick={() => void fetchHistory()}
+                className="mt-1 rounded-full bg-orange-500 px-4 py-2 text-xs font-bold text-white"
+              >
+                Retry
+              </button>
             </div>
           ) : filteredBets.length === 0 ? (
             <div className="flex flex-col items-center justify-center gap-3 py-16 text-center text-slate-400">

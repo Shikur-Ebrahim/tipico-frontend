@@ -10,7 +10,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { api, Fixture, FixtureMeta, League, LiveMatch, Odd } from '../lib/api';
+import { api, FIXTURE_LIST_LIMIT, Fixture, FixtureMeta, League, LiveMatch, Odd } from '../lib/api';
 import { getMatchWinnerDisplayOdds, hasMatchWinnerOdds } from '../lib/match-odds-display';
 import {
   groupFixturesByLeague,
@@ -111,6 +111,7 @@ function getSelectionName(selection: string, fixture: Fixture) {
 const CAROUSEL_ACTIVE_STATUSES = ['NS', 'TBD', '1H', '2H', 'HT', 'ET', 'P', 'LIVE'];
 /** Live scores / in-play list only (lightweight). */
 const LIVE_POLL_INTERVAL_MS = 45_000;
+const LIVE_SIDEBAR_STATUSES = ['1H', '2H', 'HT', 'ET', 'P', 'LIVE'];
 /** Dropdown counts from DB (no full fixture payload). */
 const META_REFRESH_INTERVAL_MS = 180_000;
 
@@ -126,6 +127,39 @@ function dayIdToLabel(dayId: string) {
   if (dayId === 'tomorrow') return 'Tomorrow';
   if (dayId.startsWith('date:')) return formatDayHeader(dayId.replace('date:', ''));
   return dayId;
+}
+
+function isInSelectedDayRange(fixture: Fixture, dayId: string) {
+  if (dayId === 'all') return true;
+
+  const fixtureDate = new Date(fixture.match_date);
+  const now = new Date();
+  const todayStart = new Date(now);
+  todayStart.setHours(0, 0, 0, 0);
+  const tomorrowStart = new Date(todayStart);
+  tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+
+  if (dayId === 'today') {
+    return fixtureDate >= todayStart && fixtureDate < tomorrowStart;
+  }
+
+  if (dayId === 'tomorrow') {
+    const tomorrowEnd = new Date(tomorrowStart);
+    tomorrowEnd.setDate(tomorrowEnd.getDate() + 1);
+    return fixtureDate >= tomorrowStart && fixtureDate < tomorrowEnd;
+  }
+
+  if (dayId.startsWith('date:')) {
+    const ymd = dayId.replace('date:', '');
+    const [y, m, d] = ymd.split('-').map((n) => parseInt(n, 10));
+    if (!y || !m || !d) return false;
+    const start = new Date(y, m - 1, d, 0, 0, 0, 0);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 1);
+    return fixtureDate >= start && fixtureDate < end;
+  }
+
+  return true;
 }
 
 export default function HomePageClient({
@@ -175,9 +209,7 @@ export default function HomePageClient({
   const [homePromoBannerIndex, setHomePromoBannerIndex] = useState(0);
   /** Frontend window: how many matches to show (DB may hold up to FIXTURE_LIST_LIMIT). */
   const [visibleLimit, setVisibleLimit] = useState(HOME_INITIAL_VISIBLE);
-  const [showSeeMore, setShowSeeMore] = useState(false);
   const [isLoadingVisibleOdds, setIsLoadingVisibleOdds] = useState(false);
-  const listEndRef = useRef<HTMLDivElement>(null);
   const fixtureFetchGenRef = useRef(0);
 
   const scrollCarousel = (dir: 'left' | 'right') => {
@@ -324,8 +356,7 @@ export default function HomePageClient({
 
   useEffect(() => {
     setVisibleLimit(HOME_INITIAL_VISIBLE);
-    setShowSeeMore(false);
-  }, [selectedDay, selectedCountry, selectedLeagueId, showLiveOnly]);
+  }, [selectedLeagueId, showLiveOnly]);
 
   const dayOptions = useMemo<DayOption[]>(() => {
     if (fixtureMeta?.days?.length) {
@@ -346,11 +377,18 @@ export default function HomePageClient({
 
   const countryOptions = useMemo<CountryOption[]>(() => {
     if (fixtureMeta?.countries?.length) {
-      return fixtureMeta.countries.map((c) => ({
-        name: c.name,
-        count: c.count,
-        flagUrl: c.flag_url,
-      }));
+      const allCount =
+        selectedDay !== 'all'
+          ? fixtureMeta.days.find((d) => d.id === selectedDay)?.count ?? fixtureMeta.total
+          : fixtureMeta.total;
+      return [
+        { name: 'All countries', count: allCount, flagUrl: null },
+        ...fixtureMeta.countries.map((c) => ({
+          name: c.name,
+          count: c.count,
+          flagUrl: c.flag_url,
+        })),
+      ];
     }
     const grouped = new Map<string, CountryOption>();
     for (const f of upcomingFixtures) {
@@ -363,7 +401,7 @@ export default function HomePageClient({
       { name: 'All countries', count: upcomingFixtures.length, flagUrl: null },
       ...Array.from(grouped.values()).sort((a, b) => a.name.localeCompare(b.name)),
     ];
-  }, [fixtureMeta, upcomingFixtures]);
+  }, [fixtureMeta, upcomingFixtures, selectedDay]);
 
   const filteredTotalCount = useMemo(() => {
     if (fixtureMeta) {
@@ -394,6 +432,15 @@ export default function HomePageClient({
         })
       : upcomingFixtures;
 
+    if (selectedDay !== 'all') {
+      pool = pool.filter((f) => isInSelectedDayRange(f, selectedDay));
+    }
+    if (selectedCountry !== 'All countries') {
+      pool = pool.filter(
+        (f) => (f.country_name || 'International') === selectedCountry
+      );
+    }
+
     const q = deferredMainSearch.trim().toLowerCase();
     if (q) {
       pool = pool.filter(
@@ -405,14 +452,17 @@ export default function HomePageClient({
       );
     }
     return pool;
-  }, [upcomingFixtures, showLiveOnly, deferredMainSearch]);
+  }, [upcomingFixtures, showLiveOnly, deferredMainSearch, selectedDay, selectedCountry]);
 
   const orderedFilteredFixtures = useMemo(
     () => orderFixturesForHomeList(filteredFixtures),
     [filteredFixtures]
   );
 
-  const visibleFixturesPool = orderedFilteredFixtures;
+  const visibleFixturesPool = useMemo(
+    () => orderedFilteredFixtures.slice(0, visibleLimit),
+    [orderedFilteredFixtures, visibleLimit]
+  );
 
   const hasMoreMatches =
     !showLiveOnly && !deferredMainSearch.trim() && visibleLimit < filteredTotalCount;
@@ -499,10 +549,21 @@ export default function HomePageClient({
 
   const loadFixtureList = useCallback(async () => {
     const gen = ++fixtureFetchGenRef.current;
-    const limit = showLiveOnly ? Math.min(400, visibleLimit) : visibleLimit;
+    const dayCap =
+      selectedDay !== 'all'
+        ? fixtureMeta?.days.find((d) => d.id === selectedDay)?.count
+        : undefined;
+    const countryCap =
+      selectedCountry !== 'All countries'
+        ? fixtureMeta?.countries.find((c) => c.name === selectedCountry)?.count
+        : undefined;
+    const totalCap = countryCap ?? dayCap ?? fixtureMeta?.total ?? FIXTURE_LIST_LIMIT;
+    const fetchLimit = showLiveOnly
+      ? Math.min(400, visibleLimit)
+      : Math.min(visibleLimit, totalCap);
     try {
       let feed = await api.getHomeFeed({
-        limit,
+        limit: fetchLimit,
         day: selectedDay !== 'all' ? selectedDay : undefined,
         country: selectedCountry !== 'All countries' ? selectedCountry : undefined,
         api_league_id: selectedLeagueId ?? undefined,
@@ -511,7 +572,7 @@ export default function HomePageClient({
 
       if (feed.fixtures.length === 0) {
         const fixtures = await api.getFixtures({
-          limit,
+          limit: fetchLimit,
           has_odds: true,
           day: selectedDay !== 'all' ? selectedDay : undefined,
           country: selectedCountry !== 'All countries' ? selectedCountry : undefined,
@@ -532,7 +593,7 @@ export default function HomePageClient({
         setIsInitialLoading(false);
       }
     }
-  }, [visibleLimit, showLiveOnly, selectedDay, selectedCountry, selectedLeagueId]);
+  }, [visibleLimit, showLiveOnly, selectedDay, selectedCountry, selectedLeagueId, fixtureMeta?.total]);
 
   useEffect(() => {
     setIsInitialLoading(true);
@@ -553,10 +614,7 @@ export default function HomePageClient({
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
-          const meta = await api.getFixturesMeta({
-            has_odds: true,
-            day: selectedDay !== 'all' ? selectedDay : undefined,
-          });
+          const meta = await api.getFixturesMeta({ has_odds: true });
           if (!cancelled && meta) startTransition(() => setFixtureMeta(meta));
           return;
         } catch {
@@ -571,6 +629,34 @@ export default function HomePageClient({
     return () => {
       cancelled = true;
       if (metaTimer) clearInterval(metaTimer);
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadCountryMeta = async () => {
+      if (selectedDay === 'all') return;
+      try {
+        const meta = await api.getFixturesMeta({
+          has_odds: true,
+          day: selectedDay,
+        });
+        if (!cancelled && meta) {
+          startTransition(() =>
+            setFixtureMeta((prev) =>
+              prev
+                ? { ...prev, countries: meta.countries }
+                : meta
+            )
+          );
+        }
+      } catch {
+        /* keep previous country counts */
+      }
+    };
+    void loadCountryMeta();
+    return () => {
+      cancelled = true;
     };
   }, [selectedDay]);
 
@@ -620,54 +706,170 @@ export default function HomePageClient({
     };
   }, []);
 
+  const fetchTopLeagues = useCallback(async () => {
+    let list = await api.getTopLeagues();
+    if (!Array.isArray(list) || list.length === 0) {
+      const all = await api.getLeagues();
+      const marked = all.filter((l) => l.is_top);
+      list = marked.length > 0 ? marked : all;
+    }
+    if (list.length > 0) {
+      startTransition(() => setTopLeagues(list.slice(0, 15)));
+    }
+  }, []);
+
   useEffect(() => {
-    if (topLeagues.length > 0) return;
-    let cancelled = false;
-    void api.getTopLeagues().then((leagues) => {
-      if (cancelled) return;
-      const list = Array.isArray(leagues) ? leagues.slice(0, 15) : [];
-      if (list.length > 0) startTransition(() => setTopLeagues(list));
-    }).catch(() => {});
-    return () => {
-      cancelled = true;
+    void fetchTopLeagues();
+  }, [fetchTopLeagues]);
+
+  useEffect(() => {
+    if (!isSidebarOpen) return;
+    setIsTopLeaguesExpanded(true);
+    setIsCountriesExpanded(true);
+    void fetchTopLeagues();
+    if (sidebarFilterMode === 'live') {
+      void api.getLiveMatches().then((rows) => {
+        if (Array.isArray(rows) && rows.length > 0) {
+          startTransition(() => setLiveMatches(rows));
+        }
+      });
+    }
+  }, [isSidebarOpen, sidebarFilterMode, fetchTopLeagues]);
+
+  const liveFixturesInFeed = useMemo(
+    () =>
+      upcomingFixtures.filter((f) => {
+        const st = f.status?.toUpperCase() || '';
+        return LIVE_SIDEBAR_STATUSES.includes(st) && !isMatchClosedForBetting(f);
+      }),
+    [upcomingFixtures]
+  );
+
+  const leaguesFromFeed = useMemo(() => {
+    const map = new Map<number, League>();
+    for (const f of upcomingFixtures) {
+      const apiId = f.api_league_id;
+      if (!apiId || map.has(apiId)) continue;
+      map.set(apiId, {
+        id: apiId,
+        country_id: 0,
+        name: f.league_name,
+        logo: f.league_logo,
+        type: '',
+        season_current: '',
+        api_league_id: apiId,
+        is_top: false,
+        top_rank: 0,
+        country_name: f.country_name || '',
+        flag_url: f.flag_url || '',
+      });
+    }
+    return [...map.values()].slice(0, 15);
+  }, [upcomingFixtures]);
+
+  const sportSidebarLeagues = useMemo(() => {
+    const base = topLeagues.length > 0 ? topLeagues : leaguesFromFeed;
+    const q = sidebarSearch.trim().toLowerCase();
+    if (!q) return base;
+    return base.filter(
+      (l) =>
+        l.name.toLowerCase().includes(q) ||
+        (l.country_name || '').toLowerCase().includes(q)
+    );
+  }, [topLeagues, leaguesFromFeed, sidebarSearch]);
+
+  const sportSidebarCountries = useMemo(() => {
+    const q = sidebarSearch.trim().toLowerCase();
+    return countryOptions.filter((c) => {
+      if (c.name === 'All countries') return false;
+      if (!q) return true;
+      return c.name.toLowerCase().includes(q);
+    });
+  }, [countryOptions, sidebarSearch]);
+
+  const liveSidebarLeagues = useMemo(() => {
+    const map = new Map<number, League & { matchCount: number }>();
+    const merge = (
+      apiId: number | null | undefined,
+      name: string,
+      logo: string | null | undefined,
+      country: string
+    ) => {
+      if (!apiId) return;
+      const existing = map.get(apiId);
+      if (existing) {
+        existing.matchCount += 1;
+        return;
+      }
+      map.set(apiId, {
+        id: apiId,
+        country_id: 0,
+        name: name || 'League',
+        logo: logo || '',
+        type: '',
+        season_current: '',
+        api_league_id: apiId,
+        is_top: false,
+        top_rank: 0,
+        country_name: country,
+        flag_url: '',
+        matchCount: 1,
+      });
     };
-  }, [topLeagues.length]);
+    for (const m of liveMatches) {
+      merge(m.api_league_id, m.league_name, m.league_logo, m.country_name || '');
+    }
+    for (const f of liveFixturesInFeed) {
+      merge(f.api_league_id, f.league_name, f.league_logo, f.country_name || '');
+    }
+    const q = sidebarSearch.trim().toLowerCase();
+    return [...map.values()]
+      .filter(
+        (l) =>
+          !q ||
+          l.name.toLowerCase().includes(q) ||
+          (l.country_name || '').toLowerCase().includes(q)
+      )
+      .sort((a, b) => b.matchCount - a.matchCount)
+      .map(({ matchCount: _mc, ...league }) => league);
+  }, [liveMatches, liveFixturesInFeed, sidebarSearch]);
+
+  const liveSidebarCountries = useMemo(() => {
+    const counts = new Map<string, { count: number; flagUrl: string | null }>();
+    const add = (name: string, flag: string | null | undefined) => {
+      const n = name || 'International';
+      const cur = counts.get(n);
+      if (cur) cur.count += 1;
+      else counts.set(n, { count: 1, flagUrl: flag || null });
+    };
+    for (const m of liveMatches) add(m.country_name, m.flag_url);
+    for (const f of liveFixturesInFeed) add(f.country_name || 'International', f.flag_url);
+    const q = sidebarSearch.trim().toLowerCase();
+    return [...counts.entries()]
+      .filter(([name]) => !q || name.toLowerCase().includes(q))
+      .map(([name, v]) => ({ name, count: v.count, flagUrl: v.flagUrl }))
+      .sort((a, b) => b.count - a.count);
+  }, [liveMatches, liveFixturesInFeed, sidebarSearch]);
 
   const groupedMatches = useMemo(
     () => groupFixturesByLeague(displayedUpcoming),
     [displayedUpcoming]
   );
 
-  useEffect(() => {
-    const el = listEndRef.current;
-    if (!el || !hasMoreMatches) {
-      setShowSeeMore(false);
-      return;
-    }
-    const observer = new IntersectionObserver(
-      ([entry]) => setShowSeeMore(entry.isIntersecting),
-      { root: null, rootMargin: '80px', threshold: 0 }
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [hasMoreMatches, groupedMatches.length, visibleLimit]);
-
   const handleLoadMoreMatches = () => {
     startTransition(() => {
       setVisibleLimit((prev) => Math.min(prev + HOME_LOAD_MORE_STEP, filteredTotalCount));
-      setShowSeeMore(false);
     });
   };
-
-  const remainingMatchCount = Math.min(
-    HOME_LOAD_MORE_STEP,
-    Math.max(0, filteredTotalCount - visibleLimit)
-  );
 
   const selectDay = useCallback((dayId: string) => {
     startTransition(() => {
       setSelectedDay(dayId);
+      setSelectedCountry('All countries');
       setOpenSheet(null);
+      setUpcomingFixtures([]);
+      setIsInitialLoading(true);
+      setVisibleLimit(HOME_INITIAL_VISIBLE);
     });
   }, []);
 
@@ -675,6 +877,9 @@ export default function HomePageClient({
     startTransition(() => {
       setSelectedCountry(name);
       setOpenSheet(null);
+      setUpcomingFixtures([]);
+      setIsInitialLoading(true);
+      setVisibleLimit(HOME_INITIAL_VISIBLE);
     });
   }, []);
 
@@ -926,7 +1131,7 @@ export default function HomePageClient({
              </button>
            ) : (
              <button 
-               onClick={() => { setSelectedDay('all'); setSelectedCountry('All countries'); }} 
+               onClick={() => selectDay('all')} 
                className="bg-[rgba(255,140,0,0.15)] border border-[rgba(255,140,0,0.3)] text-[#FF8C00] rounded-full px-3 py-1.5 text-xs font-semibold whitespace-nowrap"
              >
                All {filteredTotalCount}
@@ -963,7 +1168,7 @@ export default function HomePageClient({
          </div>
 
         {/* Popular Events Carousel */}
-        {featuredForCarousel.length > 0 && !showLiveOnly && selectedLeagueId === null && selectedCountry === 'All countries' && (
+        {featuredForCarousel.length > 0 && !showLiveOnly && selectedLeagueId === null && selectedCountry === 'All countries' && selectedDay === 'all' && (
           <section>
             <div className="flex items-center mb-3 px-1">
               <h2 className="text-[15px] font-bold flex items-center gap-2 text-white">
@@ -1286,25 +1491,17 @@ export default function HomePageClient({
                <p className="text-xs text-[#8B949E] mt-1">Try another day or filter, or check back after the server sync finishes.</p>
              </div>
            ) : null}
-            {groupedMatches.length > 0 && (
-              <div ref={listEndRef} className="h-1 w-full" aria-hidden />
-            )}
-            {hasMoreMatches && showSeeMore && (
-              <div className="flex justify-center pt-2 pb-1">
+            {hasMoreMatches && groupedMatches.length > 0 && (
+              <div className="flex justify-center pt-4 pb-2">
                 <button
                   type="button"
                   onClick={handleLoadMoreMatches}
                   disabled={isLoadingVisibleOdds}
-                  className="rounded-full border border-[#FF8C00] bg-[rgba(255,140,0,0.12)] px-6 py-2.5 text-sm font-bold text-[#FF8C00] transition-colors hover:bg-[rgba(255,140,0,0.2)] disabled:opacity-60"
+                  className="rounded-full border border-[#FF8C00] bg-[rgba(255,140,0,0.12)] px-8 py-2.5 text-sm font-bold text-[#FF8C00] transition-colors hover:bg-[rgba(255,140,0,0.2)] disabled:opacity-60"
                 >
-                  {isLoadingVisibleOdds
-                    ? 'Loading…'
-                    : `See more (${remainingMatchCount} match${remainingMatchCount === 1 ? '' : 'es'})`}
+                  {isLoadingVisibleOdds ? 'Loading…' : 'See more'}
                 </button>
               </div>
-            )}
-            {hasMoreMatches && !showSeeMore && groupedMatches.length > 0 && (
-              <p className="text-center text-[11px] text-[#8B949E] py-2">Scroll down for more matches</p>
             )}
         </section>
       </main>
@@ -1388,24 +1585,8 @@ export default function HomePageClient({
           <div className="flex-1 overflow-y-auto hide-scrollbar p-3 pt-4 space-y-6">
             {/* Top Leagues Section */}
             {(() => {
-              const liveStatuses = ['1H', '2H', 'HT', 'ET', 'P', 'LIVE'];
-              const liveLeagueIds = new Set([
-                ...liveMatches.map(m => m.api_league_id),
-                ...upcomingFixtures
-                  .filter(
-                    (f) =>
-                      liveStatuses.includes(f.status?.toUpperCase() || '') && !isMatchClosedForBetting(f)
-                  )
-                  .map((f) => f.api_league_id)
-              ]);
-
-              const filteredTopLeagues = topLeagues.filter(l => {
-                const matchesSearch = l.name.toLowerCase().includes(sidebarSearch.toLowerCase());
-                const isLive = liveLeagueIds.has(l.api_league_id);
-                return matchesSearch && (sidebarFilterMode === 'all' || isLive);
-              });
-
-              if (filteredTopLeagues.length === 0 && sidebarFilterMode === 'live') return null;
+              const filteredTopLeagues =
+                sidebarFilterMode === 'live' ? liveSidebarLeagues : sportSidebarLeagues;
 
               return (
                 <section>
@@ -1417,16 +1598,25 @@ export default function HomePageClient({
                       <div className="w-5 h-5 rounded bg-[#FF8C00] flex items-center justify-center">
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="white"><path d="M12 1L9 9H1L7 14L5 22L12 17L19 22L17 14L23 9H15L12 1Z"/></svg>
                       </div>
-                      <h3 className="text-[13px] font-bold text-white uppercase tracking-tight">Top Leagues</h3>
+                      <h3 className="text-[13px] font-bold text-white uppercase tracking-tight">
+                        {sidebarFilterMode === 'live' ? 'Live Leagues' : 'Top Leagues'}
+                      </h3>
                     </div>
                     <svg className={`w-4 h-4 text-[#8B949E] transition-transform duration-200 ${isTopLeaguesExpanded ? '' : '-rotate-90'}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="18 15 12 9 6 15"></polyline></svg>
                   </button>
 
                   {isTopLeaguesExpanded && (
                     <div className="space-y-0.5 ml-2.5 border-l border-[#30363D]">
+                      {filteredTopLeagues.length === 0 ? (
+                        <p className="px-3 py-2 text-xs text-[#8B949E]">
+                          {sidebarFilterMode === 'live'
+                            ? 'No live leagues right now.'
+                            : 'No leagues yet — try a country below.'}
+                        </p>
+                      ) : null}
                       {filteredTopLeagues.slice(0, 15).map((league) => (
                         <button 
-                          key={league.id}
+                          key={league.api_league_id}
                           onClick={() => {
                             setSelectedLeagueId(league.api_league_id);
                             setSelectedLeagueName(league.name);
@@ -1450,26 +1640,8 @@ export default function HomePageClient({
 
             {/* Countries Section */}
             {(() => {
-              const liveStatuses = ['1H', '2H', 'HT', 'ET', 'P', 'LIVE'];
-              const liveFixtures = upcomingFixtures.filter(
-                (f) => liveStatuses.includes(f.status?.toUpperCase() || '') && !isMatchClosedForBetting(f)
-              );
-
-              const liveCountsByCountry = new Map<string, number>();
-              for (const f of liveFixtures) {
-                const name = f.country_name || 'International';
-                liveCountsByCountry.set(name, (liveCountsByCountry.get(name) || 0) + 1);
-              }
-              const liveCountryNames = new Set(liveCountsByCountry.keys());
-
-              const filteredCountries = countryOptions.filter(c => {
-                if (c.name === 'All countries') return false;
-                const matchesSearch = c.name.toLowerCase().includes(sidebarSearch.toLowerCase());
-                const isLive = liveCountryNames.has(c.name);
-                return matchesSearch && (sidebarFilterMode === 'all' || isLive);
-              });
-
-              if (filteredCountries.length === 0 && sidebarFilterMode === 'live') return null;
+              const filteredCountries =
+                sidebarFilterMode === 'live' ? liveSidebarCountries : sportSidebarCountries;
 
               return (
                 <section>
@@ -1488,6 +1660,13 @@ export default function HomePageClient({
 
                   {isCountriesExpanded && (
                     <div className="space-y-0.5 ml-2.5 border-l border-[#30363D]">
+                      {filteredCountries.length === 0 ? (
+                        <p className="px-3 py-2 text-xs text-[#8B949E]">
+                          {sidebarFilterMode === 'live'
+                            ? 'No live matches by country right now.'
+                            : 'No countries loaded yet.'}
+                        </p>
+                      ) : null}
                       {filteredCountries.map((country) => (
                         <button 
                           key={country.name}
@@ -1510,7 +1689,7 @@ export default function HomePageClient({
                           <div className="flex-1 flex items-center justify-between min-w-0">
                             <span className={`text-[13px] font-semibold truncate ${selectedCountry === country.name ? 'text-[#FF8C00]' : 'text-[#C9D1D9] group-hover:text-white'}`}>{country.name}</span>
                             <span className={`text-[10px] ml-2 shrink-0 font-bold ${sidebarFilterMode === 'live' ? 'text-[#16A34A]' : 'text-[#8B949E]'}`}>
-                              {sidebarFilterMode === 'live' ? (liveCountsByCountry.get(country.name) || 0) : country.count}
+                              {'count' in country ? country.count : 0}
                             </span>
                           </div>
                         </button>

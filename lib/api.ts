@@ -91,8 +91,10 @@ export interface LiveMatch {
   away_team_name: string;
   away_team_logo: string;
   league_name: string;
+  league_logo?: string;
   api_league_id: number;
   country_name: string;
+  flag_url?: string;
 }
 
 export interface Team {
@@ -188,7 +190,13 @@ export type AdminManualTicketRow = {
 
 
 export const api = {
-  getLeagues: () => fetchAPI<League[]>('/leagues'),
+  getLeagues: async () => {
+    try {
+      return await fetchAPI<League[]>('/leagues');
+    } catch {
+      return [];
+    }
+  },
   getTopLeagues: async () => {
     try {
       return await fetchAPI<League[]>('/leagues/top');
@@ -399,19 +407,41 @@ export const api = {
 
   getBetHistory: async (userId: number) => {
     if (typeof window === 'undefined') {
-      throw new Error('Bet history is only available in the browser');
+      return [];
     }
     const token = localStorage.getItem('token');
+    if (!token) {
+      throw new Error('Login required to view bet history');
+    }
     const res = await fetchWithTimeout(`${API_URL}/betting/history/${userId}`, {
       headers: {
         'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        Authorization: `Bearer ${token}`,
       },
       cache: 'no-store',
       timeoutMs: 20_000,
     });
-    if (!res.ok) throw new Error(`Could not load bet history (${res.status})`);
-    return res.json();
+    const text = await res.text();
+    let parsed: unknown = [];
+    if (text) {
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        parsed = {};
+      }
+    }
+    if (!res.ok) {
+      const body =
+        parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+          ? (parsed as Record<string, unknown>)
+          : {};
+      const msg =
+        (typeof body.message === 'string' && body.message) ||
+        (typeof body.error === 'string' && body.error) ||
+        `Could not load bet history (${res.status})`;
+      throw new Error(msg);
+    }
+    return Array.isArray(parsed) ? parsed : [];
   },
 
   placeBet: async (payload: {
