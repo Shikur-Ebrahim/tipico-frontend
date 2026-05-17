@@ -1,20 +1,24 @@
-import { useState, useEffect } from 'react';
-import DepositManagement from './DepositManagement';
-import DepositRequests from './DepositRequests';
-import WithdrawalRequests from './WithdrawalRequests';
-import WithdrawalManagement from './WithdrawalManagement';
-import AdminBetTickets, { type AdminBetSlip } from './AdminBetTickets';
+'use client';
+
+import { useState, useEffect, useCallback, useRef } from 'react';
+import dynamic from 'next/dynamic';
+import type { AdminBetSlip } from './AdminBetTickets';
 import type { DepositTicket } from './DepositRequests';
 import type { WithdrawalTicket } from './WithdrawalRequests';
-import AdminAccountSettings from './AdminAccountSettings';
-import AdminDepositRuleSettings from './AdminDepositRuleSettings';
-import AdminTelegramSettings from './AdminTelegramSettings';
-import AdminUsersManagement from './AdminUsersManagement';
-import AdminManualTicketCreator from './AdminManualTicketCreator';
-
 import { getPublicApiBaseUrl } from '@/lib/public-api-url';
 
 const API_BASE = getPublicApiBaseUrl();
+
+const DepositManagement = dynamic(() => import('./DepositManagement'));
+const DepositRequests = dynamic(() => import('./DepositRequests'));
+const WithdrawalRequests = dynamic(() => import('./WithdrawalRequests'));
+const WithdrawalManagement = dynamic(() => import('./WithdrawalManagement'));
+const AdminBetTickets = dynamic(() => import('./AdminBetTickets'));
+const AdminAccountSettings = dynamic(() => import('./AdminAccountSettings'));
+const AdminDepositRuleSettings = dynamic(() => import('./AdminDepositRuleSettings'));
+const AdminTelegramSettings = dynamic(() => import('./AdminTelegramSettings'));
+const AdminUsersManagement = dynamic(() => import('./AdminUsersManagement'));
+const AdminManualTicketCreator = dynamic(() => import('./AdminManualTicketCreator'));
 
 type AdminDashboardProps = {
   user: any;
@@ -78,19 +82,23 @@ export default function AdminDashboard({ user, onLogout, onClose }: AdminDashboa
   const [cachedBetTickets, setCachedBetTickets] = useState<AdminBetSlip[] | null>(null);
   const [cachedDepositTickets, setCachedDepositTickets] = useState<DepositTicket[] | null>(null);
   const [cachedWithdrawalTickets, setCachedWithdrawalTickets] = useState<WithdrawalTicket[] | null>(null);
+  const prefetchInFlightRef = useRef(false);
 
-  const refreshAdminCaches = async () => {
+  const authHeaders = useCallback((): HeadersInit | null => {
+    const token = localStorage.getItem('token');
+    if (!token) return null;
+    return { Authorization: `Bearer ${token}` };
+  }, []);
+
+  /** Lightweight: badge counts only — runs on open and every 30s. */
+  const refreshCounts = useCallback(async () => {
     try {
-      const token = localStorage.getItem('token');
-      if (!token) return;
-      const headers = { Authorization: `Bearer ${token}` };
-      const [depC, wdrC, ticketC, depList, wdrList, betList] = await Promise.all([
+      const headers = authHeaders();
+      if (!headers) return;
+      const [depC, wdrC, ticketC] = await Promise.all([
         fetch(`${API_BASE}/admin/deposit-requests/count`, { headers }),
         fetch(`${API_BASE}/admin/withdrawal-requests/count`, { headers }),
         fetch(`${API_BASE}/admin/bet-tickets/won-count`, { headers }),
-        fetch(`${API_BASE}/admin/deposit-requests`, { headers }),
-        fetch(`${API_BASE}/admin/withdrawal-requests`, { headers }),
-        fetch(`${API_BASE}/admin/bet-tickets`, { headers }),
       ]);
       if (depC.ok) {
         const d = await depC.json();
@@ -106,6 +114,23 @@ export default function AdminDashboard({ user, onLogout, onClose }: AdminDashboa
         const t = await ticketC.json();
         setWonTicketCount(typeof t.count === 'number' ? t.count : 0);
       }
+    } catch (error) {
+      console.error('Failed to fetch admin counts:', error);
+    }
+  }, [authHeaders]);
+
+  /** Heavy lists — deferred so the hub opens instantly; also on demand before list screens. */
+  const prefetchLists = useCallback(async () => {
+    if (prefetchInFlightRef.current) return;
+    prefetchInFlightRef.current = true;
+    try {
+      const headers = authHeaders();
+      if (!headers) return;
+      const [depList, wdrList, betList] = await Promise.all([
+        fetch(`${API_BASE}/admin/deposit-requests`, { headers }),
+        fetch(`${API_BASE}/admin/withdrawal-requests`, { headers }),
+        fetch(`${API_BASE}/admin/bet-tickets`, { headers }),
+      ]);
       if (depList.ok) {
         const arr = await depList.json();
         setCachedDepositTickets(Array.isArray(arr) ? arr : []);
@@ -119,15 +144,33 @@ export default function AdminDashboard({ user, onLogout, onClose }: AdminDashboa
         setCachedBetTickets(Array.isArray(arr) ? arr : []);
       }
     } catch (error) {
-      console.error('Failed to fetch admin caches:', error);
+      console.error('Failed to prefetch admin lists:', error);
+    } finally {
+      prefetchInFlightRef.current = false;
     }
-  };
+  }, [authHeaders]);
 
   useEffect(() => {
-    void refreshAdminCaches();
-    const interval = setInterval(() => void refreshAdminCaches(), 30_000);
-    return () => clearInterval(interval);
-  }, []);
+    void refreshCounts();
+    const deferLists =
+      typeof requestIdleCallback === 'function'
+        ? requestIdleCallback(() => void prefetchLists())
+        : window.setTimeout(() => void prefetchLists(), 400);
+    const interval = setInterval(() => void refreshCounts(), 30_000);
+    return () => {
+      clearInterval(interval);
+      if (typeof requestIdleCallback === 'function' && typeof cancelIdleCallback === 'function') {
+        cancelIdleCallback(deferLists as number);
+      } else {
+        clearTimeout(deferLists as number);
+      }
+    };
+  }, [refreshCounts, prefetchLists]);
+
+  const openListView = (view: 'deposits' | 'withdrawals' | 'tickets') => {
+    setCurrentView(view);
+    void prefetchLists();
+  };
 
   if (!user) return null;
 
@@ -136,7 +179,7 @@ export default function AdminDashboard({ user, onLogout, onClose }: AdminDashboa
       <DepositManagement
         onClose={() => {
           setCurrentView('main');
-          void refreshAdminCaches();
+          void refreshCounts();
         }}
       />
     );
@@ -148,7 +191,8 @@ export default function AdminDashboard({ user, onLogout, onClose }: AdminDashboa
         initialTickets={cachedDepositTickets}
         onClose={() => {
           setCurrentView('main');
-          void refreshAdminCaches();
+          void refreshCounts();
+          void prefetchLists();
         }}
       />
     );
@@ -160,7 +204,8 @@ export default function AdminDashboard({ user, onLogout, onClose }: AdminDashboa
         initialTickets={cachedWithdrawalTickets}
         onClose={() => {
           setCurrentView('main');
-          void refreshAdminCaches();
+          void refreshCounts();
+          void prefetchLists();
         }}
       />
     );
@@ -171,7 +216,7 @@ export default function AdminDashboard({ user, onLogout, onClose }: AdminDashboa
       <WithdrawalManagement
         onClose={() => {
           setCurrentView('main');
-          void refreshAdminCaches();
+          void refreshCounts();
         }}
       />
     );
@@ -183,7 +228,8 @@ export default function AdminDashboard({ user, onLogout, onClose }: AdminDashboa
         initialSlips={cachedBetTickets}
         onClose={() => {
           setCurrentView('main');
-          void refreshAdminCaches();
+          void refreshCounts();
+          void prefetchLists();
         }}
       />
     );
@@ -214,7 +260,7 @@ export default function AdminDashboard({ user, onLogout, onClose }: AdminDashboa
       {/* Top Header */}
       <header className="bg-white px-6 py-5 flex justify-between items-center shrink-0 border-b border-[#F1F5F9]">
         <div className="text-2xl italic font-black text-[#1A202C] tracking-tighter">TIPICO</div>
-        <button 
+        <button
           onClick={onLogout}
           className="text-xs bg-[#F1F5F9] text-[#475569] px-5 py-2.5 rounded-full font-bold transition-all active:scale-95"
         >
@@ -222,7 +268,6 @@ export default function AdminDashboard({ user, onLogout, onClose }: AdminDashboa
         </button>
       </header>
 
-      {/* Grid Content - No Scroll Layout */}
       <main className="flex-1 grid grid-cols-2 auto-rows-fr gap-3 p-4 overflow-y-auto">
         {adminActions.map((action) => (
           <button
@@ -234,13 +279,11 @@ export default function AdminDashboard({ user, onLogout, onClose }: AdminDashboa
                 return;
               }
               if (action.id === 'deposit') {
-                void refreshAdminCaches();
-                setCurrentView('deposits');
+                openListView('deposits');
                 return;
               }
               if (action.id === 'withdrawals') {
-                void refreshAdminCaches();
-                setCurrentView('withdrawals');
+                openListView('withdrawals');
                 return;
               }
               if (action.id === 'withdrawalM') {
@@ -248,8 +291,7 @@ export default function AdminDashboard({ user, onLogout, onClose }: AdminDashboa
                 return;
               }
               if (action.id === 'tickets') {
-                void refreshAdminCaches();
-                setCurrentView('tickets');
+                openListView('tickets');
                 return;
               }
               if (action.id === 'telegram') {
@@ -276,12 +318,12 @@ export default function AdminDashboard({ user, onLogout, onClose }: AdminDashboa
             className="relative z-10 flex h-full min-h-[96px] w-full flex-col items-center justify-center gap-2.5 rounded-2xl border border-[#F1F5F9] bg-[#F8FAFC] transition-all active:scale-95"
           >
             {action.id === 'deposit' && pendingCount > 0 && (
-              <div className="pointer-events-none absolute right-3 top-3 flex h-6 w-6 items-center justify-center rounded-full bg-red-500 text-[10px] font-black text-white shadow-lg shadow-red-200 animate-bounce">
+              <div className="pointer-events-none absolute right-3 top-3 flex h-6 w-6 items-center justify-center rounded-full bg-red-500 text-[10px] font-black text-white shadow-lg shadow-red-200">
                 {pendingCount > 99 ? '99+' : pendingCount}
               </div>
             )}
             {action.id === 'withdrawals' && pendingWithdrawalCount > 0 && (
-              <div className="pointer-events-none absolute right-3 top-3 flex h-6 w-6 items-center justify-center rounded-full bg-red-500 text-[10px] font-black text-white shadow-lg shadow-red-200 animate-bounce">
+              <div className="pointer-events-none absolute right-3 top-3 flex h-6 w-6 items-center justify-center rounded-full bg-red-500 text-[10px] font-black text-white shadow-lg shadow-red-200">
                 {pendingWithdrawalCount > 99 ? '99+' : pendingWithdrawalCount}
               </div>
             )}
