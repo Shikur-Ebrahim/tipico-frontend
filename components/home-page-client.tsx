@@ -449,7 +449,7 @@ export default function HomePageClient({
   }, [fixtureMeta, upcomingFixtures, selectedDay]);
 
   const filteredTotalCount = useMemo(() => {
-    if (fixtureMeta) {
+    if (fixtureMeta && fixtureMeta.total > 0) {
       if (selectedCountry !== 'All countries') {
         return fixtureMeta.countries.find((c) => c.name === selectedCountry)?.count ?? 0;
       }
@@ -515,15 +515,18 @@ export default function HomePageClient({
     !deferredMainSearch.trim() &&
     visibleLimit < filteredTotalCount;
 
+  /** Rows to request from API — never default to 5000 before meta loads (timeouts on Render). */
   const apiFetchLimit = useMemo(() => {
     if (showLiveOnly) return Math.min(400, fixtureMeta?.total ?? 400);
-    let cap = fixtureMeta?.total ?? FIXTURE_LIST_LIMIT;
+    const metaTotal = fixtureMeta?.total;
+    if (!metaTotal || metaTotal <= 0) return HOME_INITIAL_VISIBLE;
+    let cap = metaTotal;
     if (selectedCountry !== 'All countries') {
       cap = fixtureMeta?.countries.find((c) => c.name === selectedCountry)?.count ?? cap;
     } else if (selectedDay !== 'all') {
       cap = fixtureMeta?.days.find((d) => d.id === selectedDay)?.count ?? cap;
     }
-    return Math.min(Math.max(1, cap), FIXTURE_LIST_LIMIT);
+    return Math.min(Math.max(HOME_INITIAL_VISIBLE, cap), FIXTURE_LIST_LIMIT);
   }, [showLiveOnly, selectedDay, selectedCountry, fixtureMeta]);
 
   /** List rows from API (has_odds); 1X2 lines load in the background per row. */
@@ -593,17 +596,20 @@ export default function HomePageClient({
   }, [oddsTargetIds]);
 
   const applyFeedToState = useCallback(
-    (fixtures: Fixture[], odds: Record<number, Odd[]>) => {
-      setUpcomingFixtures(fixtures);
+    (fixtures: Fixture[], odds: Record<number, Odd[]>, replace = true) => {
+      if (fixtures.length === 0 && !replace) return;
+      if (fixtures.length > 0) {
+        setUpcomingFixtures(fixtures);
+        writeHomeFeedCache(
+          filterCacheKey(selectedDay, selectedCountry, selectedLeagueId),
+          fixtures,
+          odds,
+          fixtureMetaRef.current
+        );
+      }
       if (Object.keys(odds).length > 0) {
         setOddsMap((prev) => ({ ...prev, ...odds }));
       }
-      writeHomeFeedCache(
-        filterCacheKey(selectedDay, selectedCountry, selectedLeagueId),
-        fixtures,
-        odds,
-        fixtureMetaRef.current
-      );
     },
     [selectedDay, selectedCountry, selectedLeagueId]
   );
@@ -612,7 +618,12 @@ export default function HomePageClient({
     async (opts?: { background?: boolean }) => {
       const background = opts?.background === true;
       const gen = ++fixtureFetchGenRef.current;
-      const fetchLimit = apiFetchLimit;
+      const fetchLimit = showLiveOnly
+        ? Math.min(400, Math.max(visibleLimit, apiFetchLimit))
+        : Math.min(
+            FIXTURE_LIST_LIMIT,
+            Math.max(HOME_INITIAL_VISIBLE, visibleLimit, apiFetchLimit)
+          );
       try {
         let feed = await api.getHomeFeed({
           limit: fetchLimit,
@@ -634,7 +645,7 @@ export default function HomePageClient({
           feed = { fixtures, odds: {} };
         }
 
-        const apply = () => applyFeedToState(feed.fixtures, feed.odds);
+        const apply = () => applyFeedToState(feed.fixtures, feed.odds, !background);
         if (background) startTransition(apply);
         else apply();
       } finally {
@@ -643,7 +654,7 @@ export default function HomePageClient({
         }
       }
     },
-    [apiFetchLimit, showLiveOnly, selectedDay, selectedCountry, selectedLeagueId, applyFeedToState]
+    [apiFetchLimit, visibleLimit, showLiveOnly, selectedDay, selectedCountry, selectedLeagueId, applyFeedToState]
   );
 
   const hydrateFromCache = useCallback(
@@ -712,8 +723,10 @@ export default function HomePageClient({
     const pending = consumeHomeFeedPrefetch();
     if (pending) {
       void pending.then((snap) => {
-        applyBootstrapSnapshot(snap.fixtures, snap.odds, snap.meta);
-        void loadFixtureList({ background: true });
+        if (snap.fixtures.length > 0) {
+          applyBootstrapSnapshot(snap.fixtures, snap.odds, snap.meta);
+        }
+        void loadFixtureList({ background: true }).finally(() => setListFetchSettled(true));
       });
       return;
     }
@@ -738,14 +751,15 @@ export default function HomePageClient({
     void loadFixtureList().finally(() => setListFetchSettled(true));
   }, [selectedDay, selectedCountry, selectedLeagueId, loadFixtureList]);
 
-  /** Load remaining rows for this filter so "See more" only reveals +50 locally. */
+  /** After meta loads, prefetch full filter list in background (never before — avoids 5000-row timeout). */
   useEffect(() => {
     if (showLiveOnly || deferredMainSearch.trim()) return;
+    if (!fixtureMeta?.total || fixtureMeta.total <= HOME_INITIAL_VISIBLE) return;
     const target = apiFetchLimit;
-    if (target <= HOME_INITIAL_VISIBLE) return;
     if (upcomingFixturesRef.current.length >= target) return;
     void loadFixtureList({ background: true });
   }, [
+    fixtureMeta?.total,
     apiFetchLimit,
     showLiveOnly,
     deferredMainSearch,
@@ -785,16 +799,19 @@ export default function HomePageClient({
       }
     };
 
-    if (!initialFixtureMeta) {
-      void loadMeta();
-    } else {
-      window.setTimeout(() => void loadMeta(), 8_000);
-    }
+    void loadMeta();
     metaTimer = setInterval(() => void loadMeta(), META_REFRESH_INTERVAL_MS);
+
+    const onBootstrapMeta = (e: Event) => {
+      const meta = (e as CustomEvent<FixtureMeta>).detail;
+      if (meta?.total) setFixtureMeta(meta);
+    };
+    window.addEventListener('tipico:home-meta', onBootstrapMeta);
 
     return () => {
       cancelled = true;
       if (metaTimer) clearInterval(metaTimer);
+      window.removeEventListener('tipico:home-meta', onBootstrapMeta);
     };
   }, []);
 

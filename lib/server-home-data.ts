@@ -26,7 +26,7 @@ export function emptyServerHomeBundle(): ServerHomeBundle {
   return { fixtures: [], odds: {}, meta: null, topLeagues: [] };
 }
 
-const SSR_MAX_WAIT_MS = 4_000;
+const SSR_MAX_WAIT_MS = 22_000;
 
 /** Server-only: first paint bundle for home (100 matches + dropdown counts). */
 export async function fetchServerHomeBundle(): Promise<ServerHomeBundle> {
@@ -40,16 +40,11 @@ export async function fetchServerHomeBundle(): Promise<ServerHomeBundle> {
   const limit = HOME_INITIAL_VISIBLE;
 
   try {
-    const [homeRes, metaRes, leaguesRes] = await Promise.all([
+    const [homeRes, leaguesRes] = await Promise.all([
       fetchWithTimeout(`${base}/fixtures/home?limit=${limit}`, {
         headers: { 'Content-Type': 'application/json' },
         next: { revalidate: 120 },
-        timeoutMs: 12_000,
-      }),
-      fetchWithTimeout(`${base}/fixtures/meta?has_odds=1`, {
-        headers: { 'Content-Type': 'application/json' },
-        next: { revalidate: 120 },
-        timeoutMs: 12_000,
+        timeoutMs: 20_000,
       }),
       fetchWithTimeout(`${base}/leagues/top`, {
         headers: { 'Content-Type': 'application/json' },
@@ -67,22 +62,13 @@ export async function fetchServerHomeBundle(): Promise<ServerHomeBundle> {
       odds = parseOddsMap(home.odds);
     }
 
-    let meta: FixtureMeta | null = null;
-    if (metaRes.ok) {
-      const m = (await metaRes.json()) as FixtureMeta;
-      meta =
-        m && typeof m.total === 'number' && Array.isArray(m.days)
-          ? m
-          : EMPTY_META;
-    }
-
     let topLeagues: League[] = [];
     if (leaguesRes.ok) {
       const rows = await leaguesRes.json();
       topLeagues = Array.isArray(rows) ? rows.slice(0, 15) : [];
     }
 
-    return { fixtures, odds, meta, topLeagues };
+    return { fixtures, odds, meta: null, topLeagues };
   } catch {
     return emptyServerHomeBundle();
   }

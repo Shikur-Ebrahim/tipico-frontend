@@ -255,7 +255,7 @@ export const api = {
     const path = `/fixtures/home${qs ? `?${qs}` : ''}`;
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        const raw = await fetchAPI<HomeFeedResponse>(path, { timeoutMs: 25_000 });
+        const raw = await fetchAPI<HomeFeedResponse>(path, { timeoutMs: 45_000 });
         const fixtures = Array.isArray(raw?.fixtures) ? raw.fixtures : [];
         const odds = raw?.odds && typeof raw.odds === 'object' ? raw.odds : {};
         const oddsOut: Record<number, Odd[]> = {};

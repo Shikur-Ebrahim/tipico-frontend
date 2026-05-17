@@ -36,21 +36,28 @@ export function startHomeFeedPrefetch(): void {
 
   prefetchPromise = (async () => {
     const feed = await api.getHomeFeed({ limit: HOME_INITIAL_VISIBLE });
-    let meta: FixtureMeta | null = null;
-    try {
-      meta = await api.getFixturesMeta({ has_odds: true });
-    } catch {
-      /* counts can load later */
-    }
     const snap: HomeBootstrapSnapshot = {
       fixtures: feed.fixtures,
       odds: feed.odds,
-      meta,
+      meta: null,
     };
     if (snap.fixtures.length > 0) {
-      writeHomeFeedCache(DEFAULT_KEY, snap.fixtures, snap.odds, snap.meta);
+      writeHomeFeedCache(DEFAULT_KEY, snap.fixtures, snap.odds, null);
       memorySnapshot = snap;
     }
+    void api.getFixturesMeta({ has_odds: true }).then((meta) => {
+      if (!meta?.total) return;
+      const base = memorySnapshot;
+      if (base?.fixtures.length) {
+        memorySnapshot = { ...base, meta };
+        writeHomeFeedCache(DEFAULT_KEY, base.fixtures, base.odds, meta);
+      }
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('tipico:home-meta', { detail: meta })
+        );
+      }
+    });
     return snap;
   })();
 }
