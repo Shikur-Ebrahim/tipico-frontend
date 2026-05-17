@@ -524,9 +524,6 @@ export default function HomePageClient({
     [carouselFixtures]
   );
 
-  const oddsMapRef = useRef(oddsMap);
-  oddsMapRef.current = oddsMap;
-
   const oddsTargetIds = useMemo(() => {
     const ids = new Set<number>();
     for (const f of visibleFixturesPool) ids.add(f.id);
