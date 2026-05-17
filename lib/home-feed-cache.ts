@@ -10,7 +10,8 @@ export type HomeFeedCacheEntry = {
 const STORAGE_PREFIX = 'tipico-home-feed:';
 const TTL_MS = 30 * 60 * 1000;
 
-let memoryEntry: { key: string; entry: HomeFeedCacheEntry } | null = null;
+const memoryCache = new Map<string, HomeFeedCacheEntry>();
+const prefetchInFlight = new Set<string>();
 
 export function homeFeedCacheKey(
   day: string,
@@ -26,9 +27,8 @@ function isFresh(entry: HomeFeedCacheEntry | null | undefined): entry is HomeFee
 }
 
 export function peekHomeFeedCache(key: string): HomeFeedCacheEntry | null {
-  if (memoryEntry?.key === key && isFresh(memoryEntry.entry)) {
-    return memoryEntry.entry;
-  }
+  const mem = memoryCache.get(key);
+  if (mem && isFresh(mem)) return mem;
   if (typeof window === 'undefined') return null;
   try {
     const raw = sessionStorage.getItem(STORAGE_PREFIX + key);
@@ -36,9 +36,10 @@ export function peekHomeFeedCache(key: string): HomeFeedCacheEntry | null {
     const parsed = JSON.parse(raw) as HomeFeedCacheEntry;
     if (!isFresh(parsed)) {
       sessionStorage.removeItem(STORAGE_PREFIX + key);
+      memoryCache.delete(key);
       return null;
     }
-    memoryEntry = { key, entry: parsed };
+    memoryCache.set(key, parsed);
     return parsed;
   } catch {
     return null;
@@ -58,11 +59,61 @@ export function writeHomeFeedCache(
     meta,
     savedAt: Date.now(),
   };
-  memoryEntry = { key, entry };
+  memoryCache.set(key, entry);
   if (typeof window === 'undefined') return;
   try {
     sessionStorage.setItem(STORAGE_PREFIX + key, JSON.stringify(entry));
   } catch {
     /* quota */
+  }
+}
+
+function prefetchHomeFeedKey(
+  key: string,
+  fetch: () => Promise<{ fixtures: Fixture[]; odds: Record<number, Odd[]> }>
+): void {
+  if (typeof window === 'undefined') return;
+  if (peekHomeFeedCache(key) || prefetchInFlight.has(key)) return;
+  prefetchInFlight.add(key);
+  void fetch()
+    .then(({ fixtures, odds }) => {
+      if (fixtures.length > 0) writeHomeFeedCache(key, fixtures, odds, null);
+    })
+    .catch(() => {})
+    .finally(() => prefetchInFlight.delete(key));
+}
+
+/** Warm per-day home feeds so Today / Tomorrow clicks are instant. */
+export function prefetchHomeDayFeeds(
+  dayIds: string[],
+  limit: number,
+  fetchFeed: (day: string) => Promise<{ fixtures: Fixture[]; odds: Record<number, Odd[]> }>
+): void {
+  for (const dayId of dayIds) {
+    if (!dayId || dayId === 'all') continue;
+    const key = homeFeedCacheKey(dayId, 'All countries', null);
+    prefetchHomeFeedKey(key, () => fetchFeed(dayId));
+  }
+}
+
+/** Warm per-country feeds for the landing country dropdown / sidebar. */
+export function prefetchHomeCountryFeeds(
+  day: string,
+  countries: string[],
+  limit: number,
+  fetchFeed: (params: {
+    day?: string;
+    country: string;
+  }) => Promise<{ fixtures: Fixture[]; odds: Record<number, Odd[]> }>
+): void {
+  for (const country of countries) {
+    if (!country || country === 'All countries') continue;
+    const key = homeFeedCacheKey(day, country, null);
+    prefetchHomeFeedKey(key, () =>
+      fetchFeed({
+        day: day !== 'all' ? day : undefined,
+        country,
+      })
+    );
   }
 }

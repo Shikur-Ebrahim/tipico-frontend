@@ -1,7 +1,15 @@
 import { api, type Fixture, type FixtureMeta, type Odd } from './api';
 import { mergeDayCountsIntoMeta, metaFromDayCounts } from './fixture-meta-utils';
 import { HOME_INITIAL_VISIBLE } from './home-fixture-list';
-import { homeFeedCacheKey, peekHomeFeedCache, writeHomeFeedCache } from './home-feed-cache';
+import {
+  homeFeedCacheKey,
+  peekHomeFeedCache,
+  prefetchHomeCountryFeeds,
+  prefetchHomeDayFeeds,
+  writeHomeFeedCache,
+} from './home-feed-cache';
+
+const PREFETCH_TOP_COUNTRIES = 12;
 
 export type HomeBootstrapSnapshot = {
   fixtures: Fixture[];
@@ -46,6 +54,9 @@ export function startHomeFeedPrefetch(): void {
       writeHomeFeedCache(DEFAULT_KEY, snap.fixtures, snap.odds, null);
       memorySnapshot = snap;
     }
+    prefetchHomeDayFeeds(['today', 'tomorrow'], HOME_INITIAL_VISIBLE, (day) =>
+      api.getHomeFeed({ limit: HOME_INITIAL_VISIBLE, day })
+    );
     void api.getFixturesDayCounts().then((counts) => {
       if (!counts?.days?.length) return;
       const partial = metaFromDayCounts(counts);
@@ -68,6 +79,22 @@ export function startHomeFeedPrefetch(): void {
         writeHomeFeedCache(DEFAULT_KEY, base.fixtures, base.odds, full);
       }
       window.dispatchEvent(new CustomEvent('tipico:home-meta', { detail: full }));
+      const dayIds = full.days?.map((d) => d.id).filter((id) => id !== 'all') ?? [];
+      if (dayIds.length) {
+        prefetchHomeDayFeeds(dayIds, HOME_INITIAL_VISIBLE, (day) =>
+          api.getHomeFeed({ limit: HOME_INITIAL_VISIBLE, day })
+        );
+      }
+      const topCountries = full.countries
+        .filter((c) => c.name !== 'All countries' && c.count > 0)
+        .sort((a, b) => b.count - a.count)
+        .slice(0, PREFETCH_TOP_COUNTRIES)
+        .map((c) => c.name);
+      if (topCountries.length) {
+        prefetchHomeCountryFeeds('all', topCountries, HOME_INITIAL_VISIBLE, (params) =>
+          api.getHomeFeed({ limit: HOME_INITIAL_VISIBLE, ...params })
+        );
+      }
     });
     return snap;
   })();

@@ -28,8 +28,12 @@ import {
 import {
   homeFeedCacheKey,
   peekHomeFeedCache,
+  prefetchHomeCountryFeeds,
+  prefetchHomeDayFeeds,
   writeHomeFeedCache,
 } from '../lib/home-feed-cache';
+
+const PREFETCH_TOP_COUNTRIES = 12;
 import { mergeDayCountsIntoMeta } from '../lib/fixture-meta-utils';
 
 if (typeof window !== 'undefined') {
@@ -756,12 +760,38 @@ export default function HomePageClient({
       setUpcomingFixtures(cached.fixtures);
       setOddsMap((prev) => ({ ...prev, ...cached.odds }));
       if (cached.meta) setFixtureMeta(cached.meta);
-      setListFetchSettled(true);
-      void loadFixtureList({ background: true });
-      return;
     }
-    void loadFixtureList().finally(() => setListFetchSettled(true));
+    setListFetchSettled(true);
+    void loadFixtureList({ background: true });
   }, [selectedDay, selectedCountry, selectedLeagueId, loadFixtureList]);
+
+  /** Warm day dropdown options so switching days feels instant. */
+  useEffect(() => {
+    if (!fixtureMeta?.days?.length) return;
+    const dayIds = fixtureMeta.days.map((d) => d.id);
+    prefetchHomeDayFeeds(dayIds, HOME_INITIAL_VISIBLE, (day) =>
+      api.getHomeFeed({ limit: HOME_INITIAL_VISIBLE, day })
+    );
+  }, [fixtureMeta?.days]);
+
+  /** Warm country dropdown / sidebar so country clicks show matches immediately. */
+  useEffect(() => {
+    if (!fixtureMeta?.countries?.length) return;
+    const topCountries = fixtureMeta.countries
+      .filter((c) => c.name !== 'All countries' && c.count > 0)
+      .sort((a, b) => b.count - a.count)
+      .slice(0, PREFETCH_TOP_COUNTRIES)
+      .map((c) => c.name);
+    if (!topCountries.length) return;
+    prefetchHomeCountryFeeds('all', topCountries, HOME_INITIAL_VISIBLE, (params) =>
+      api.getHomeFeed({ limit: HOME_INITIAL_VISIBLE, ...params })
+    );
+    if (selectedDay !== 'all') {
+      prefetchHomeCountryFeeds(selectedDay, topCountries, HOME_INITIAL_VISIBLE, (params) =>
+        api.getHomeFeed({ limit: HOME_INITIAL_VISIBLE, ...params })
+      );
+    }
+  }, [fixtureMeta?.countries, selectedDay]);
 
   /** After meta loads, prefetch full filter list in background (never before — avoids 5000-row timeout). */
   useEffect(() => {
@@ -1076,46 +1106,63 @@ export default function HomePageClient({
     }
   };
 
+  const applyFilterCache = useCallback(
+    (day: string, country: string, leagueId: number | null = null) => {
+      const cached = peekHomeFeedCache(filterCacheKey(day, country, leagueId));
+      if (!cached?.fixtures.length) return false;
+      setUpcomingFixtures(cached.fixtures);
+      setOddsMap((prev) => ({ ...prev, ...cached.odds }));
+      if (cached.meta) setFixtureMeta(cached.meta);
+      return true;
+    },
+    []
+  );
+
+  const restoreBroaderFeedPool = useCallback(
+    (day: string) => {
+      if (applyFilterCache(day, 'All countries', null)) return;
+      if (day !== 'all') applyFilterCache('all', 'All countries', null);
+    },
+    [applyFilterCache]
+  );
+
   const selectDay = useCallback((dayId: string) => {
+    setOpenSheet(null);
+    setSelectedCountry('All countries');
+    setVisibleLimit(HOME_INITIAL_VISIBLE);
+    setSelectedDay(dayId);
+    setListFetchSettled(true);
+
     const cached = peekHomeFeedCache(filterCacheKey(dayId, 'All countries', null));
-    startTransition(() => {
-      setSelectedDay(dayId);
-      setSelectedCountry('All countries');
-      setOpenSheet(null);
-      setVisibleLimit(HOME_INITIAL_VISIBLE);
-      if (cached?.fixtures.length) {
-        setUpcomingFixtures(cached.fixtures);
-        setOddsMap((prev) => ({ ...prev, ...cached.odds }));
-        if (cached.meta) setFixtureMeta(cached.meta);
-        setListFetchSettled(true);
+    if (cached?.fixtures.length) {
+      setUpcomingFixtures(cached.fixtures);
+      setOddsMap((prev) => ({ ...prev, ...cached.odds }));
+      if (cached.meta) setFixtureMeta(cached.meta);
+    } else if (dayId === 'all') {
+      const allCached = peekHomeFeedCache(filterCacheKey('all', 'All countries', null));
+      if (allCached?.fixtures.length) {
+        setUpcomingFixtures(allCached.fixtures);
+        setOddsMap((prev) => ({ ...prev, ...allCached.odds }));
+        if (allCached.meta) setFixtureMeta(allCached.meta);
       } else {
-        setUpcomingFixtures([]);
-        setListFetchSettled(false);
-        void loadFixtureList().finally(() => setListFetchSettled(true));
+        void loadFixtureList({ background: true });
       }
-    });
+    }
   }, [loadFixtureList]);
 
   const selectCountry = useCallback((name: string) => {
-    const cached = peekHomeFeedCache(
-      filterCacheKey(selectedDay, name, null)
-    );
-    startTransition(() => {
-      setSelectedCountry(name);
-      setOpenSheet(null);
-      setVisibleLimit(HOME_INITIAL_VISIBLE);
-      if (cached?.fixtures.length) {
-        setUpcomingFixtures(cached.fixtures);
-        setOddsMap((prev) => ({ ...prev, ...cached.odds }));
-        if (cached.meta) setFixtureMeta(cached.meta);
-        setListFetchSettled(true);
-      } else {
-        setUpcomingFixtures([]);
-        setListFetchSettled(false);
-        void loadFixtureList().finally(() => setListFetchSettled(true));
-      }
-    });
-  }, [selectedDay, loadFixtureList]);
+    setOpenSheet(null);
+    setVisibleLimit(HOME_INITIAL_VISIBLE);
+    setSelectedCountry(name);
+    setListFetchSettled(true);
+
+    const cached = peekHomeFeedCache(filterCacheKey(selectedDay, name, null));
+    if (cached?.fixtures.length) {
+      setUpcomingFixtures(cached.fixtures);
+      setOddsMap((prev) => ({ ...prev, ...cached.odds }));
+      if (cached.meta) setFixtureMeta(cached.meta);
+    }
+  }, [selectedDay]);
 
   return (
     <div className="site-shell overflow-x-hidden bg-[#0D1117] min-h-screen text-white pb-[70px]">
@@ -1357,7 +1404,7 @@ export default function HomePageClient({
              </button>
            ) : selectedCountry !== 'All countries' ? (
              <button
-               onClick={() => setSelectedCountry('All countries')}
+               onClick={() => selectCountry('All countries')}
                className="flex items-center gap-1.5 bg-[rgba(255,140,0,0.15)] border border-[rgba(255,140,0,0.4)] text-[#FF8C00] rounded-full px-3 py-1.5 text-xs font-semibold whitespace-nowrap max-w-[160px]"
              >
                <span className="truncate">{selectedCountry}</span>
@@ -1711,7 +1758,7 @@ export default function HomePageClient({
                   )}
                 </div>
               );
-            }) : listFetchSettled && upcomingFixtures.length === 0 ? (
+            }) : listFetchSettled && displayedUpcoming.length === 0 ? (
              <div className="site-card rounded-xl p-8 text-center flex flex-col items-center justify-center border border-[#30363D]">
                <div className="w-12 h-12 rounded-full bg-[#21262D] flex items-center justify-center mb-3">
                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#8B949E" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
@@ -1899,9 +1946,7 @@ export default function HomePageClient({
                         <button 
                           key={country.name}
                           onClick={() => {
-                            setSelectedCountry(country.name);
-                            setSelectedLeagueId(null);
-                            setSelectedLeagueName(null);
+                            selectCountry(country.name);
                             setIsSidebarOpen(false);
                           }}
                           className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors group relative ${selectedCountry === country.name && selectedLeagueId === null ? 'bg-[#FF8C00]/10' : 'hover:bg-[#21262D]'}`}
