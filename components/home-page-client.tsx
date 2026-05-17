@@ -30,6 +30,7 @@ import {
   peekHomeFeedCache,
   writeHomeFeedCache,
 } from '../lib/home-feed-cache';
+import { mergeDayCountsIntoMeta } from '../lib/fixture-meta-utils';
 
 if (typeof window !== 'undefined') {
   startHomeFeedPrefetch();
@@ -411,9 +412,8 @@ export default function HomePageClient({
         count: d.count,
       }));
     }
-    const count = upcomingFixtures.length;
-    return [{ id: 'all', label: 'All Games', count }];
-  }, [fixtureMeta, upcomingFixtures.length]);
+    return [{ id: 'all', label: 'All Games', count: 0 }];
+  }, [fixtureMeta]);
 
   const selectedDayLabel = useMemo(
     () => dayOptions.find((option) => option.id === selectedDay)?.label || 'Today',
@@ -449,17 +449,21 @@ export default function HomePageClient({
   }, [fixtureMeta, upcomingFixtures, selectedDay]);
 
   const filteredTotalCount = useMemo(() => {
-    if (fixtureMeta && fixtureMeta.total > 0) {
+    if (fixtureMeta) {
+      const dbTotal =
+        fixtureMeta.days.find((d) => d.id === 'all')?.count ?? fixtureMeta.total;
       if (selectedCountry !== 'All countries') {
-        return fixtureMeta.countries.find((c) => c.name === selectedCountry)?.count ?? 0;
+        const c = fixtureMeta.countries.find((x) => x.name === selectedCountry)?.count;
+        if (c != null && c > 0) return c;
       }
       if (selectedDay !== 'all') {
-        return fixtureMeta.days.find((d) => d.id === selectedDay)?.count ?? 0;
+        const d = fixtureMeta.days.find((x) => x.id === selectedDay)?.count;
+        if (d != null && d > 0) return d;
       }
-      return fixtureMeta.total;
+      if (dbTotal > 0) return dbTotal;
     }
-    return upcomingFixtures.length;
-  }, [fixtureMeta, selectedDay, selectedCountry, upcomingFixtures.length]);
+    return 0;
+  }, [fixtureMeta, selectedDay, selectedCountry]);
 
   useEffect(() => {
     if (!countryOptions.some((country) => country.name === selectedCountry)) {
@@ -693,6 +697,14 @@ export default function HomePageClient({
   useLayoutEffect(() => {
     startHomeFeedPrefetch();
 
+    if (!initialFixtureMeta?.days?.length) {
+      void api.getFixturesDayCounts().then((counts) => {
+        if (counts?.days?.length) {
+          setFixtureMeta((prev) => mergeDayCountsIntoMeta(prev, counts));
+        }
+      });
+    }
+
     if (initialUpcomingFixtures.length > 0) {
       writeHomeFeedCache(
         filterCacheKey('all', 'All countries', null),
@@ -775,6 +787,14 @@ export default function HomePageClient({
 
     const loadMeta = async () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+
+      const counts = await api.getFixturesDayCounts();
+      if (!cancelled && counts?.days?.length) {
+        startTransition(() =>
+          setFixtureMeta((prev) => mergeDayCountsIntoMeta(prev, counts))
+        );
+      }
+
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           const meta = await api.getFixturesMeta({ has_odds: true });
@@ -804,7 +824,12 @@ export default function HomePageClient({
 
     const onBootstrapMeta = (e: Event) => {
       const meta = (e as CustomEvent<FixtureMeta>).detail;
-      if (meta?.total) setFixtureMeta(meta);
+      if (!meta?.days?.length) return;
+      setFixtureMeta((prev) =>
+        meta.countries.length > 1
+          ? meta
+          : mergeDayCountsIntoMeta(prev, { total: meta.total, days: meta.days })
+      );
     };
     window.addEventListener('tipico:home-meta', onBootstrapMeta);
 
@@ -1343,7 +1368,7 @@ export default function HomePageClient({
                onClick={() => selectDay('all')} 
                className="bg-[rgba(255,140,0,0.15)] border border-[rgba(255,140,0,0.3)] text-[#FF8C00] rounded-full px-3 py-1.5 text-xs font-semibold whitespace-nowrap"
              >
-               All {filteredTotalCount}
+               All{filteredTotalCount > 0 ? ` ${filteredTotalCount}` : ''}
              </button>
            )}
 

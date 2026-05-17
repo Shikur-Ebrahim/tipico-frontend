@@ -8,7 +8,7 @@ export type HomeFeedCacheEntry = {
 };
 
 const STORAGE_PREFIX = 'tipico-home-feed:';
-const TTL_MS = 10 * 60 * 1000;
+const TTL_MS = 30 * 60 * 1000;
 
 let memoryEntry: { key: string; entry: HomeFeedCacheEntry } | null = null;
 

@@ -1,10 +1,10 @@
 import HomePageClient from '../components/home-page-client';
-import { fetchServerHomeBundleFast } from '../lib/server-home-data';
+import { getCachedHomeBundle } from '../lib/cached-home-bundle';
 
-export const dynamic = 'force-dynamic';
+export const revalidate = 30;
 
 export default async function Home() {
-  const { fixtures, odds, meta, topLeagues } = await fetchServerHomeBundleFast();
+  const { fixtures, odds, meta, topLeagues } = await getCachedHomeBundle();
 
   return (
     <HomePageClient

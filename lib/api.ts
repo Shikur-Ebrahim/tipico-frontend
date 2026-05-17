@@ -1,3 +1,4 @@
+import { resolveApiUrl } from './api-base';
 import { fetchWithTimeout } from './fetch-with-timeout';
 import { getPublicApiBaseUrl } from './public-api-url';
 
@@ -17,10 +18,11 @@ async function parseJsonResponse(res: Response): Promise<Record<string, unknown>
 }
 
 async function fetchAPI<T>(endpoint: string, options?: RequestInit & { timeoutMs?: number }): Promise<T> {
-  const res = await fetchWithTimeout(`${API_URL}${endpoint}`, {
+  const url = resolveApiUrl(endpoint);
+  const res = await fetchWithTimeout(url, {
     headers: { 'Content-Type': 'application/json' },
-    cache: 'no-store',
-    timeoutMs: options?.timeoutMs ?? 25_000,
+    cache: typeof window !== 'undefined' ? 'default' : 'no-store',
+    timeoutMs: options?.timeoutMs ?? 8_000,
     ...options,
   });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
@@ -45,6 +47,11 @@ export type FixtureMeta = {
   total: number;
   days: { id: string; count: number }[];
   countries: { name: string; count: number; flag_url: string | null }[];
+};
+
+export type FixtureDayCounts = {
+  total: number;
+  days: { id: string; count: number }[];
 };
 
 export type HomeFeedResponse = {
@@ -253,24 +260,29 @@ export const api = {
     if (params?.api_league_id) search.set('api_league_id', String(params.api_league_id));
     const qs = search.toString();
     const path = `/fixtures/home${qs ? `?${qs}` : ''}`;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        const raw = await fetchAPI<HomeFeedResponse>(path, { timeoutMs: 45_000 });
-        const fixtures = Array.isArray(raw?.fixtures) ? raw.fixtures : [];
-        const odds = raw?.odds && typeof raw.odds === 'object' ? raw.odds : {};
-        const oddsOut: Record<number, Odd[]> = {};
-        for (const [key, rows] of Object.entries(odds)) {
-          const id = parseInt(key, 10);
-          if (Number.isFinite(id) && Array.isArray(rows)) oddsOut[id] = rows;
-        }
-        return { fixtures, odds: oddsOut };
-      } catch {
-        if (attempt < 2) {
-          await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
-        }
+    try {
+      const raw = await fetchAPI<HomeFeedResponse>(path, { timeoutMs: 8_000 });
+      const fixtures = Array.isArray(raw?.fixtures) ? raw.fixtures : [];
+      const odds = raw?.odds && typeof raw.odds === 'object' ? raw.odds : {};
+      const oddsOut: Record<number, Odd[]> = {};
+      for (const [key, rows] of Object.entries(odds)) {
+        const id = parseInt(key, 10);
+        if (Number.isFinite(id) && Array.isArray(rows)) oddsOut[id] = rows;
       }
+      return { fixtures, odds: oddsOut };
+    } catch {
+      return { fixtures: [] as Fixture[], odds: {} as Record<number, Odd[]> };
     }
-    return { fixtures: [] as Fixture[], odds: {} as Record<number, Odd[]> };
+  },
+  /** Fast DB counts for day dropdown (target under 5s). */
+  getFixturesDayCounts: async () => {
+    try {
+      return await fetchAPI<FixtureDayCounts>('/fixtures/meta/summary?has_odds=1', {
+        timeoutMs: 5_000,
+      });
+    } catch {
+      return null;
+    }
   },
   getFixturesMeta: async (params?: { has_odds?: boolean; day?: string }) => {
     const search = new URLSearchParams();
@@ -278,7 +290,7 @@ export const api = {
     if (params?.day) search.set('day', params.day);
     const qs = search.toString();
     try {
-      return await fetchAPI<FixtureMeta>(`/fixtures/meta${qs ? `?${qs}` : ''}`, { timeoutMs: 45_000 });
+      return await fetchAPI<FixtureMeta>(`/fixtures/meta${qs ? `?${qs}` : ''}`, { timeoutMs: 10_000 });
     } catch {
       return null;
     }

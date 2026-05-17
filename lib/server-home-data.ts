@@ -1,7 +1,8 @@
 import { fetchWithTimeout } from './fetch-with-timeout';
 import { HOME_INITIAL_VISIBLE } from './home-fixture-list';
 import { getPublicApiBaseUrl } from './public-api-url';
-import type { Fixture, FixtureMeta, League, Odd } from './api';
+import type { Fixture, FixtureDayCounts, FixtureMeta, League, Odd } from './api';
+import { metaFromDayCounts } from './fixture-meta-utils';
 
 export type ServerHomeBundle = {
   fixtures: Fixture[];
@@ -26,7 +27,7 @@ export function emptyServerHomeBundle(): ServerHomeBundle {
   return { fixtures: [], odds: {}, meta: null, topLeagues: [] };
 }
 
-const SSR_MAX_WAIT_MS = 22_000;
+const SSR_MAX_WAIT_MS = 8_000;
 
 /** Server-only: first paint bundle for home (100 matches + dropdown counts). */
 export async function fetchServerHomeBundle(): Promise<ServerHomeBundle> {
@@ -40,11 +41,16 @@ export async function fetchServerHomeBundle(): Promise<ServerHomeBundle> {
   const limit = HOME_INITIAL_VISIBLE;
 
   try {
-    const [homeRes, leaguesRes] = await Promise.all([
+    const [homeRes, summaryRes, leaguesRes] = await Promise.all([
       fetchWithTimeout(`${base}/fixtures/home?limit=${limit}`, {
         headers: { 'Content-Type': 'application/json' },
         next: { revalidate: 120 },
-        timeoutMs: 20_000,
+        timeoutMs: 8_000,
+      }),
+      fetchWithTimeout(`${base}/fixtures/meta/summary?has_odds=1`, {
+        headers: { 'Content-Type': 'application/json' },
+        next: { revalidate: 120 },
+        timeoutMs: 8_000,
       }),
       fetchWithTimeout(`${base}/leagues/top`, {
         headers: { 'Content-Type': 'application/json' },
@@ -68,7 +74,13 @@ export async function fetchServerHomeBundle(): Promise<ServerHomeBundle> {
       topLeagues = Array.isArray(rows) ? rows.slice(0, 15) : [];
     }
 
-    return { fixtures, odds, meta: null, topLeagues };
+    let meta: FixtureMeta | null = null;
+    if (summaryRes.ok) {
+      const summary = (await summaryRes.json()) as FixtureDayCounts;
+      if (summary?.days?.length) meta = metaFromDayCounts(summary);
+    }
+
+    return { fixtures, odds, meta, topLeagues };
   } catch {
     return emptyServerHomeBundle();
   }
