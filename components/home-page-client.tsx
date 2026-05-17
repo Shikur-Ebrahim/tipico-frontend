@@ -500,28 +500,50 @@ export default function HomePageClient({
   const loadFixtureList = useCallback(async () => {
     const gen = ++fixtureFetchGenRef.current;
     const limit = showLiveOnly ? Math.min(400, visibleLimit) : visibleLimit;
-    const fixtures = await api.getFixtures({ ...listFetchParams, limit });
-    if (gen !== fixtureFetchGenRef.current) return;
-    startTransition(() => {
-      setUpcomingFixtures(Array.isArray(fixtures) ? fixtures : []);
-      setIsInitialLoading(false);
-    });
-  }, [listFetchParams, showLiveOnly, visibleLimit]);
+    try {
+      let feed = await api.getHomeFeed({
+        limit,
+        day: selectedDay !== 'all' ? selectedDay : undefined,
+        country: selectedCountry !== 'All countries' ? selectedCountry : undefined,
+        api_league_id: selectedLeagueId ?? undefined,
+      });
+      if (gen !== fixtureFetchGenRef.current) return;
+
+      if (feed.fixtures.length === 0) {
+        const fixtures = await api.getFixtures({
+          limit,
+          has_odds: true,
+          day: selectedDay !== 'all' ? selectedDay : undefined,
+          country: selectedCountry !== 'All countries' ? selectedCountry : undefined,
+          api_league_id: selectedLeagueId ?? undefined,
+        });
+        if (gen !== fixtureFetchGenRef.current) return;
+        feed = { fixtures, odds: {} };
+      }
+
+      startTransition(() => {
+        setUpcomingFixtures(feed.fixtures);
+        if (Object.keys(feed.odds).length > 0) {
+          setOddsMap((prev) => ({ ...prev, ...feed.odds }));
+        }
+      });
+    } finally {
+      if (gen === fixtureFetchGenRef.current) {
+        setIsInitialLoading(false);
+      }
+    }
+  }, [visibleLimit, showLiveOnly, selectedDay, selectedCountry, selectedLeagueId]);
 
   useEffect(() => {
-    let cancelled = false;
     setIsInitialLoading(true);
-    void (async () => {
-      try {
-        await loadFixtureList();
-      } catch {
-        if (!cancelled) setIsInitialLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    void loadFixtureList();
   }, [loadFixtureList]);
+
+  useEffect(() => {
+    if (!isInitialLoading) return;
+    const safety = window.setTimeout(() => setIsInitialLoading(false), 50_000);
+    return () => window.clearTimeout(safety);
+  }, [isInitialLoading]);
 
   useEffect(() => {
     let cancelled = false;

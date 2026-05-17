@@ -47,6 +47,11 @@ export type FixtureMeta = {
   countries: { name: string; count: number; flag_url: string | null }[];
 };
 
+export type HomeFeedResponse = {
+  fixtures: Fixture[];
+  odds: Record<string, Odd[]>;
+};
+
 export interface Fixture {
   id: number;
   league_id: number;
@@ -215,11 +220,49 @@ export const api = {
     if (params?.limit) search.set('limit', String(params.limit));
     if (params?.has_odds) search.set('has_odds', '1');
     const qs = search.toString();
-    try {
-      return await fetchAPI<Fixture[]>(`/fixtures${qs ? `?${qs}` : ''}`, { timeoutMs: 35_000 });
-    } catch {
-      return [];
+    const path = `/fixtures${qs ? `?${qs}` : ''}`;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await fetchAPI<Fixture[]>(path, { timeoutMs: 60_000 });
+      } catch {
+        if (attempt < 2) {
+          await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+        }
+      }
     }
+    return [];
+  },
+  getHomeFeed: async (params?: {
+    limit?: number;
+    day?: string;
+    country?: string;
+    api_league_id?: number;
+  }) => {
+    const search = new URLSearchParams();
+    if (params?.limit) search.set('limit', String(params.limit));
+    if (params?.day) search.set('day', params.day);
+    if (params?.country) search.set('country', params.country);
+    if (params?.api_league_id) search.set('api_league_id', String(params.api_league_id));
+    const qs = search.toString();
+    const path = `/fixtures/home${qs ? `?${qs}` : ''}`;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const raw = await fetchAPI<HomeFeedResponse>(path, { timeoutMs: 90_000 });
+        const fixtures = Array.isArray(raw?.fixtures) ? raw.fixtures : [];
+        const odds = raw?.odds && typeof raw.odds === 'object' ? raw.odds : {};
+        const oddsOut: Record<number, Odd[]> = {};
+        for (const [key, rows] of Object.entries(odds)) {
+          const id = parseInt(key, 10);
+          if (Number.isFinite(id) && Array.isArray(rows)) oddsOut[id] = rows;
+        }
+        return { fixtures, odds: oddsOut };
+      } catch {
+        if (attempt < 2) {
+          await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+        }
+      }
+    }
+    return { fixtures: [] as Fixture[], odds: {} as Record<number, Odd[]> };
   },
   getFixturesMeta: async (params?: { has_odds?: boolean; day?: string }) => {
     const search = new URLSearchParams();
