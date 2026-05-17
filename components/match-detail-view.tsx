@@ -138,7 +138,7 @@ export default function MatchDetailView({ initialFixture, initialOdds }: Props) 
       }
     };
 
-    timeoutId = setTimeout(runTick, 0);
+    timeoutId = setTimeout(runTick, 12_000);
     return () => {
       cancelled = true;
       clearTimeout(timeoutId);
@@ -348,22 +348,6 @@ export default function MatchDetailView({ initialFixture, initialOdds }: Props) 
           onAuthTrigger={() => setIsAuthOpen(true)}
           onBetPlaced={() => setIsBetHistoryOpen(true)}
         />
-        <Link href="/" prefetch={false} className="flex flex-col items-center gap-1 text-[#8B949E] hover:text-white transition-colors">
-          <svg
-            className="w-6 h-6"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <line x1="3" y1="12" x2="21" y2="12" />
-            <line x1="3" y1="6" x2="21" y2="6" />
-            <line x1="3" y1="18" x2="21" y2="18" />
-          </svg>
-          <span className="text-[10px] font-semibold">Menu</span>
-        </Link>
       </nav>
     </div>
   );

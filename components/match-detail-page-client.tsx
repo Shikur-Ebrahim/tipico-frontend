@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import { api, Fixture, Odd } from '../lib/api';
 import { homeFeedCacheKey, peekHomeFeedCache } from '../lib/home-feed-cache';
 import MatchDetailView from './match-detail-view';
@@ -48,21 +48,45 @@ function findInHomeCaches(id: number): { fixture: Fixture | null; odds: Odd[] } 
   return { fixture: null, odds: [] };
 }
 
-function Shell({ children }: { children: ReactNode }) {
-  return (
-    <div className="site-shell bg-[#0D1117] min-h-screen text-white flex flex-col items-center justify-center gap-4 px-6">
-      {children}
-    </div>
-  );
+const SESSION_PREFIX = 'tipico-match-snap:';
+
+function readSessionSnapshot(id: number): { fixture: Fixture | null; odds: Odd[] } {
+  if (typeof window === 'undefined') return { fixture: null, odds: [] };
+  try {
+    const raw = sessionStorage.getItem(`${SESSION_PREFIX}${id}`);
+    if (!raw) return { fixture: null, odds: [] };
+    const parsed = JSON.parse(raw) as { fixture?: Fixture; odds?: Odd[] };
+    if (parsed.fixture?.id === id) {
+      return { fixture: parsed.fixture, odds: parsed.odds ?? [] };
+    }
+  } catch {
+    /* ignore */
+  }
+  return { fixture: null, odds: [] };
 }
 
-function Spinner() {
-  return (
-    <div
-      className="w-10 h-10 border-2 border-[#FF8C00]/30 border-t-[#FF8C00] rounded-full animate-spin"
-      aria-hidden
-    />
-  );
+export function stashMatchForDetail(fixture: Fixture, odds: Odd[]) {
+  if (typeof window === 'undefined') return;
+  try {
+    sessionStorage.setItem(
+      `${SESSION_PREFIX}${fixture.id}`,
+      JSON.stringify({ fixture, odds })
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
+function resolveInstant(matchId: number, initialFixture: Fixture | null, initialOdds: Odd[]) {
+  if (initialFixture) {
+    return { fixture: initialFixture, odds: initialOdds };
+  }
+  if (typeof window === 'undefined') {
+    return { fixture: null as Fixture | null, odds: [] as Odd[] };
+  }
+  const session = readSessionSnapshot(matchId);
+  if (session.fixture) return session;
+  return findInHomeCaches(matchId);
 }
 
 export default function MatchDetailPageClient({
@@ -70,108 +94,76 @@ export default function MatchDetailPageClient({
   initialFixture,
   initialOdds,
 }: Props) {
-  const [fixture, setFixture] = useState<Fixture | null>(initialFixture);
-  const [odds, setOdds] = useState<Odd[]>(initialOdds);
-  const [loading, setLoading] = useState(!initialFixture);
-  const [error, setError] = useState<string | null>(null);
+  const instant = resolveInstant(matchId, initialFixture, initialOdds);
+  const [fixture, setFixture] = useState<Fixture | null>(instant.fixture);
+  const [odds, setOdds] = useState<Odd[]>(instant.odds);
+  const [fetchDone, setFetchDone] = useState(false);
 
   useEffect(() => {
     if (!Number.isFinite(matchId) || matchId <= 0) {
-      setError('Invalid match link.');
-      setLoading(false);
-      return;
-    }
-
-    if (initialFixture) {
-      setFixture(initialFixture);
-      setOdds(initialOdds);
-      setLoading(false);
-      if (initialOdds.length === 0) {
-        void api.getOdds(matchId).then((rows) => {
-          if (Array.isArray(rows) && rows.length > 0) setOdds(rows);
-        });
-      }
+      setFetchDone(true);
       return;
     }
 
     let cancelled = false;
 
-    const load = async () => {
-      setLoading(true);
-      setError(null);
-
-      const cached = findInHomeCaches(matchId);
-      if (cached.fixture && !cancelled) {
-        setFixture(cached.fixture);
-        if (cached.odds.length > 0) setOdds(cached.odds);
-        setLoading(false);
-      }
-
+    const refresh = async () => {
       const [nextFixture, nextOdds] = await Promise.all([
         api.getFixture(matchId),
         api.getOdds(matchId),
       ]);
-
       if (cancelled) return;
-
       if (nextFixture) {
         setFixture(nextFixture);
-        setOdds(Array.isArray(nextOdds) && nextOdds.length > 0 ? nextOdds : cached.odds);
-        setError(null);
-      } else if (!cached.fixture) {
-        setError('This match could not be loaded. It may have ended or been removed.');
+        setOdds(Array.isArray(nextOdds) ? nextOdds : []);
       }
-
-      setLoading(false);
+      setFetchDone(true);
     };
 
-    void load();
+    void refresh();
     return () => {
       cancelled = true;
     };
-  }, [matchId, initialFixture, initialOdds]);
+  }, [matchId]);
 
   if (!Number.isFinite(matchId) || matchId <= 0) {
     return (
-      <Shell>
-        <p className="text-sm text-[#8B949E] text-center">Invalid match link.</p>
+      <ErrorShell message="Invalid match link.">
         <Link href="/" className="text-[#FF8C00] font-semibold text-sm">
           Back to home
         </Link>
-      </Shell>
+      </ErrorShell>
     );
   }
 
-  if (loading && !fixture) {
-    return (
-      <Shell>
-        <Spinner />
-        <p className="text-sm text-[#8B949E]">Loading match…</p>
-      </Shell>
-    );
+  if (fixture) {
+    return <MatchDetailView initialFixture={fixture} initialOdds={odds} />;
   }
 
-  if (error && !fixture) {
-    return (
-      <Shell>
-        <p className="text-sm text-[#8B949E] text-center max-w-xs">{error}</p>
-        <Link href="/" className="text-[#FF8C00] font-semibold text-sm">
-          Back to home
-        </Link>
-      </Shell>
-    );
+  if (!fetchDone) {
+    return <div className="site-shell bg-[#0D1117] min-h-screen" />;
   }
 
-  if (!fixture) {
-    return (
-      <Shell>
-        <p className="text-sm text-[#8B949E] text-center">Match not found.</p>
-        <Link href="/" className="text-[#FF8C00] font-semibold text-sm">
-          Back to home
-        </Link>
-      </Shell>
-    );
-  }
+  return (
+    <ErrorShell message="Match not found.">
+      <Link href="/" className="text-[#FF8C00] font-semibold text-sm">
+        Back to home
+      </Link>
+    </ErrorShell>
+  );
+}
 
-  return <MatchDetailView initialFixture={fixture} initialOdds={odds} />;
+function ErrorShell({
+  message,
+  children,
+}: {
+  message: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="site-shell bg-[#0D1117] min-h-screen text-white flex flex-col items-center justify-center gap-4 px-6">
+      <p className="text-sm text-[#8B949E] text-center max-w-xs">{message}</p>
+      {children}
+    </div>
+  );
 }
