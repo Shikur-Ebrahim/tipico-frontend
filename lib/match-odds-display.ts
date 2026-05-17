@@ -14,6 +14,24 @@ function isMatchWinnerMarket(o: Odd): boolean {
   );
 }
 
+const MATCH_WINNER_SORT: Record<string, number> = {
+  home: 1,
+  '1': 1,
+  draw: 2,
+  x: 2,
+  away: 3,
+  '2': 3,
+};
+
+function sortMatchWinnerSelections(odds: Odd[]): Odd[] {
+  return [...odds].sort((a, b) => {
+    const orderA = MATCH_WINNER_SORT[a.selection.toLowerCase()] ?? 99;
+    const orderB = MATCH_WINNER_SORT[b.selection.toLowerCase()] ?? 99;
+    if (orderA !== orderB) return orderA - orderB;
+    return a.selection.localeCompare(b.selection);
+  });
+}
+
 function getDisplayOdds(odds: Odd[]) {
   const selections = new Map<string, Odd>();
   for (const odd of odds) {
@@ -23,7 +41,7 @@ function getDisplayOdds(odds: Odd[]) {
       selections.set(odd.selection, odd);
     }
   }
-  return Array.from(selections.values()).slice(0, 3);
+  return sortMatchWinnerSelections(Array.from(selections.values())).slice(0, 3);
 }
 
 /** 1X2 / match-winner lines only (no fallback to other markets). */
