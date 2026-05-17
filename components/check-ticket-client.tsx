@@ -227,9 +227,6 @@ export default function CheckTicketClient() {
       <main className="flex-1 overflow-y-auto px-4 py-6 pb-24">
         {!ticket ? (
           <div className="mx-auto w-full max-w-md">
-            <p className="mb-6 text-center text-sm text-[#8B949E]">
-              Enter your ticket code to view stake, odds, and results. No login required.
-            </p>
             <form onSubmit={onSubmit} className="space-y-4">
               <label className="block">
                 <span className="mb-2 block text-xs font-medium uppercase tracking-wide text-[#8B949E]">
@@ -242,7 +239,6 @@ export default function CheckTicketClient() {
                     setCode(e.target.value);
                     if (error) setError(null);
                   }}
-                  placeholder="e.g. T12AB34 or code:T12AB34"
                   autoComplete="off"
                   autoCapitalize="characters"
                   spellCheck={false}

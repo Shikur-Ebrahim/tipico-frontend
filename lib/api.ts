@@ -184,10 +184,16 @@ export type AdminManualTicketRow = {
 
 export const api = {
   getLeagues: () => fetchAPI<League[]>('/leagues'),
-  getTopLeagues: () => fetchAPI<League[]>('/leagues/top'),
+  getTopLeagues: async () => {
+    try {
+      return await fetchAPI<League[]>('/leagues/top');
+    } catch {
+      return [];
+    }
+  },
   getLeague: (id: number) => fetchAPI<League>(`/leagues/${id}`),
 
-  getFixtures: (params?: {
+  getFixtures: async (params?: {
     league_id?: number;
     api_league_id?: number;
     country?: string;
@@ -209,19 +215,33 @@ export const api = {
     if (params?.limit) search.set('limit', String(params.limit));
     if (params?.has_odds) search.set('has_odds', '1');
     const qs = search.toString();
-    return fetchAPI<Fixture[]>(`/fixtures${qs ? `?${qs}` : ''}`, { timeoutMs: 35_000 });
+    try {
+      return await fetchAPI<Fixture[]>(`/fixtures${qs ? `?${qs}` : ''}`, { timeoutMs: 35_000 });
+    } catch {
+      return [];
+    }
   },
-  getFixturesMeta: (params?: { has_odds?: boolean; day?: string }) => {
+  getFixturesMeta: async (params?: { has_odds?: boolean; day?: string }) => {
     const search = new URLSearchParams();
     if (params?.has_odds) search.set('has_odds', '1');
     if (params?.day) search.set('day', params.day);
     const qs = search.toString();
-    return fetchAPI<FixtureMeta>(`/fixtures/meta${qs ? `?${qs}` : ''}`, { timeoutMs: 15_000 });
+    try {
+      return await fetchAPI<FixtureMeta>(`/fixtures/meta${qs ? `?${qs}` : ''}`, { timeoutMs: 45_000 });
+    } catch {
+      return null;
+    }
   },
   getFixture: (id: number) => fetchAPI<Fixture>(`/fixtures/${id}`),
   getLiveFixtures: () => fetchAPI<Fixture[]>('/fixtures/live'),
 
-  getLiveMatches: () => fetchAPI<LiveMatch[]>('/live/matches'),
+  getLiveMatches: async () => {
+    try {
+      return await fetchAPI<LiveMatch[]>('/live/matches');
+    } catch {
+      return [];
+    }
+  },
 
   getTeams: (leagueId?: number) => {
     const qs = leagueId ? `?league_id=${leagueId}` : '';

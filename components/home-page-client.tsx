@@ -328,15 +328,16 @@ export default function HomePageClient({
   }, [selectedDay, selectedCountry, selectedLeagueId, showLiveOnly]);
 
   const dayOptions = useMemo<DayOption[]>(() => {
-    if (!fixtureMeta?.days?.length) {
-      return [{ id: 'all', label: 'All Games', count: 0 }];
+    if (fixtureMeta?.days?.length) {
+      return fixtureMeta.days.map((d) => ({
+        id: d.id,
+        label: dayIdToLabel(d.id),
+        count: d.count,
+      }));
     }
-    return fixtureMeta.days.map((d) => ({
-      id: d.id,
-      label: dayIdToLabel(d.id),
-      count: d.count,
-    }));
-  }, [fixtureMeta]);
+    const count = upcomingFixtures.length;
+    return [{ id: 'all', label: 'All Games', count }];
+  }, [fixtureMeta, upcomingFixtures.length]);
 
   const selectedDayLabel = useMemo(
     () => dayOptions.find((option) => option.id === selectedDay)?.label || 'Today',
@@ -344,26 +345,38 @@ export default function HomePageClient({
   );
 
   const countryOptions = useMemo<CountryOption[]>(() => {
-    if (!fixtureMeta?.countries?.length) {
-      return [{ name: 'All countries', count: 0, flagUrl: null }];
+    if (fixtureMeta?.countries?.length) {
+      return fixtureMeta.countries.map((c) => ({
+        name: c.name,
+        count: c.count,
+        flagUrl: c.flag_url,
+      }));
     }
-    return fixtureMeta.countries.map((c) => ({
-      name: c.name,
-      count: c.count,
-      flagUrl: c.flag_url,
-    }));
-  }, [fixtureMeta]);
+    const grouped = new Map<string, CountryOption>();
+    for (const f of upcomingFixtures) {
+      const name = f.country_name || 'International';
+      const cur = grouped.get(name);
+      if (cur) cur.count += 1;
+      else grouped.set(name, { name, count: 1, flagUrl: f.flag_url || null });
+    }
+    return [
+      { name: 'All countries', count: upcomingFixtures.length, flagUrl: null },
+      ...Array.from(grouped.values()).sort((a, b) => a.name.localeCompare(b.name)),
+    ];
+  }, [fixtureMeta, upcomingFixtures]);
 
   const filteredTotalCount = useMemo(() => {
-    if (!fixtureMeta) return 0;
-    if (selectedCountry !== 'All countries') {
-      return fixtureMeta.countries.find((c) => c.name === selectedCountry)?.count ?? 0;
+    if (fixtureMeta) {
+      if (selectedCountry !== 'All countries') {
+        return fixtureMeta.countries.find((c) => c.name === selectedCountry)?.count ?? 0;
+      }
+      if (selectedDay !== 'all') {
+        return fixtureMeta.days.find((d) => d.id === selectedDay)?.count ?? 0;
+      }
+      return fixtureMeta.total;
     }
-    if (selectedDay !== 'all') {
-      return fixtureMeta.days.find((d) => d.id === selectedDay)?.count ?? 0;
-    }
-    return fixtureMeta.total;
-  }, [fixtureMeta, selectedDay, selectedCountry]);
+    return upcomingFixtures.length;
+  }, [fixtureMeta, selectedDay, selectedCountry, upcomingFixtures.length]);
 
   useEffect(() => {
     if (!countryOptions.some((country) => country.name === selectedCountry)) {
@@ -404,11 +417,8 @@ export default function HomePageClient({
   const hasMoreMatches =
     !showLiveOnly && !deferredMainSearch.trim() && visibleLimit < filteredTotalCount;
 
-  /** Only render rows once 1X2 odds are loaded for that fixture. */
-  const displayedUpcoming = useMemo(
-    () => visibleFixturesPool.filter((f) => hasMatchWinnerOdds(oddsMap[f.id])),
-    [visibleFixturesPool, oddsMap]
-  );
+  /** List rows from API (has_odds); 1X2 lines load in the background per row. */
+  const displayedUpcoming = visibleFixturesPool;
 
   const liveFixtureIds = useMemo(() => new Set(liveMatches.map((match) => match.fixture_id)), [liveMatches]);
 
@@ -490,7 +500,7 @@ export default function HomePageClient({
   const loadFixtureList = useCallback(async () => {
     const gen = ++fixtureFetchGenRef.current;
     const limit = showLiveOnly ? Math.min(400, visibleLimit) : visibleLimit;
-    const fixtures = await api.getFixtures({ ...listFetchParams, limit }).catch(() => [] as Fixture[]);
+    const fixtures = await api.getFixtures({ ...listFetchParams, limit });
     if (gen !== fixtureFetchGenRef.current) return;
     startTransition(() => {
       setUpcomingFixtures(Array.isArray(fixtures) ? fixtures : []);
@@ -519,14 +529,17 @@ export default function HomePageClient({
 
     const loadMeta = async () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-      try {
-        const meta = await api.getFixturesMeta({
-          has_odds: true,
-          day: selectedDay !== 'all' ? selectedDay : undefined,
-        });
-        if (!cancelled) startTransition(() => setFixtureMeta(meta));
-      } catch {
-        /* ignore */
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const meta = await api.getFixturesMeta({
+            has_odds: true,
+            day: selectedDay !== 'all' ? selectedDay : undefined,
+          });
+          if (!cancelled && meta) startTransition(() => setFixtureMeta(meta));
+          return;
+        } catch {
+          if (attempt < 2) await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+        }
       }
     };
 
@@ -592,7 +605,7 @@ export default function HomePageClient({
       if (cancelled) return;
       const list = Array.isArray(leagues) ? leagues.slice(0, 15) : [];
       if (list.length > 0) startTransition(() => setTopLeagues(list));
-    });
+    }).catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -1040,11 +1053,7 @@ export default function HomePageClient({
            </div>
          )}
          <section className="space-y-4 pb-4">
-            {(isInitialLoading ||
-              (visibleFixturesPool.length > 0 &&
-                displayedUpcoming.length === 0 &&
-                isLoadingVisibleOdds)) &&
-            groupedMatches.length === 0 ? (
+            {isInitialLoading && groupedMatches.length === 0 ? (
               <div className="site-card rounded-xl p-10 text-center border border-[#E2E8F0]">
                 <div className="mx-auto h-9 w-9 animate-spin rounded-full border-2 border-[#E2E8F0] border-t-[#FF8C00]" />
                 <p className="mt-4 text-sm font-semibold text-[#1A202C]">Loading matches with odds…</p>
@@ -1076,9 +1085,7 @@ export default function HomePageClient({
                   </div>
                   {!isCollapsed && (
                     <div className="bg-[#E8EDF5] p-[2px] flex flex-col gap-[2px]">
-                      {matches
-                        .filter((fixture) => hasMatchWinnerOdds(oddsMap[fixture.id]))
-                        .map((fixture, index) => {
+                      {matches.map((fixture) => {
                         const isLive = liveFixtureIds.has(fixture.id);
                                            const renderStatus = () => {
                           const status = fixture.status?.toUpperCase() || 'NS';
@@ -1162,6 +1169,18 @@ export default function HomePageClient({
                                const isFinished = isMatchClosedForBetting(fixture);
                                const rowOdds = oddsMap[fixture.id];
                                const displayOdds = getMatchWinnerDisplayOdds(rowOdds || []);
+                               if (displayOdds.length === 0 && !isFinished) {
+                                 return (
+                                   <div className="flex gap-1.5 mt-2">
+                                     {[0, 1, 2].map((i) => (
+                                       <div
+                                         key={i}
+                                         className="flex-1 rounded-md py-2 bg-[#D3DBE8] animate-pulse"
+                                       />
+                                     ))}
+                                   </div>
+                                 );
+                               }
                                if (displayOdds.length > 0) {
                                  return (
                                    <div className="flex gap-1.5 mt-2">
@@ -1236,7 +1255,7 @@ export default function HomePageClient({
                   )}
                 </div>
               );
-            }) : (
+            }) : !isInitialLoading && upcomingFixtures.length === 0 ? (
              <div className="site-card rounded-xl p-8 text-center flex flex-col items-center justify-center border border-[#30363D]">
                <div className="w-12 h-12 rounded-full bg-[#21262D] flex items-center justify-center mb-3">
                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#8B949E" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
@@ -1244,7 +1263,7 @@ export default function HomePageClient({
                <p className="text-sm font-semibold text-white">No matches with odds right now</p>
                <p className="text-xs text-[#8B949E] mt-1">Try another day or filter, or check back after the server sync finishes.</p>
              </div>
-           )}
+           ) : null}
             {groupedMatches.length > 0 && (
               <div ref={listEndRef} className="h-1 w-full" aria-hidden />
             )}
