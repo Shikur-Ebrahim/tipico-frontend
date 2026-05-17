@@ -38,7 +38,6 @@ import {
 
 const PREFETCH_TOP_COUNTRIES = 12;
 import { mergeDayCountsIntoMeta } from '../lib/fixture-meta-utils';
-import { stashMatchForDetail } from './match-detail-page-client';
 import BetSlipDrawer from './BetSlipDrawer';
 import { useBetSlip } from '../lib/betslip';
 import AuthModal from './auth-modal';
@@ -254,6 +253,7 @@ export default function HomePageClient({
   const [homePromoBannerIndex, setHomePromoBannerIndex] = useState(0);
   /** Frontend window: how many matches to show (DB may hold up to FIXTURE_LIST_LIMIT). */
   const [visibleLimit, setVisibleLimit] = useState(HOME_INITIAL_VISIBLE);
+  const [isLoadingVisibleOdds, setIsLoadingVisibleOdds] = useState(false);
   const fixtureFetchGenRef = useRef(0);
   const fixtureMetaRef = useRef(fixtureMeta);
   const upcomingFixturesRef = useRef(upcomingFixtures);
@@ -575,6 +575,7 @@ export default function HomePageClient({
     if (needIds.length === 0) return;
 
     const loadOdds = async () => {
+      setIsLoadingVisibleOdds(true);
       const CHUNK = 80;
       try {
         for (let i = 0; i < needIds.length; i += CHUNK) {
@@ -593,16 +594,30 @@ export default function HomePageClient({
             });
           });
         }
-      } catch {
-        /* ignore bulk odds errors */
+      } finally {
+        if (!cancelled) setIsLoadingVisibleOdds(false);
       }
     };
 
-    void loadOdds();
+    const startDelay = ssrBundleReady ? 2500 : 0;
+    const start = () => {
+      if (!cancelled) void loadOdds();
+    };
+    let idleId: number | undefined;
+    let timerId: ReturnType<typeof setTimeout> | undefined;
+    if (typeof requestIdleCallback !== 'undefined') {
+      idleId = requestIdleCallback(start, { timeout: startDelay + 1500 });
+    } else {
+      timerId = setTimeout(start, startDelay);
+    }
     return () => {
       cancelled = true;
+      if (idleId != null && typeof cancelIdleCallback !== 'undefined') {
+        cancelIdleCallback(idleId);
+      }
+      if (timerId) clearTimeout(timerId);
     };
-  }, [oddsTargetIds]);
+  }, [oddsTargetIds, ssrBundleReady]);
 
   const applyFeedToState = useCallback(
     (fixtures: Fixture[], odds: Record<number, Odd[]>, replace = true) => {
@@ -787,17 +802,15 @@ export default function HomePageClient({
       setUpcomingFixtures(cached.fixtures);
       setOddsMap((prev) => ({ ...prev, ...cached.odds }));
       if (cached.meta) setFixtureMeta(cached.meta);
-      setListFetchSettled(true);
-      void loadFixtureList({ background: true });
-      return;
     }
-    void loadFixtureList({ background: true }).finally(() => setListFetchSettled(true));
+    setListFetchSettled(true);
+    void loadFixtureList({ background: true });
   }, [selectedDay, selectedCountry, selectedLeagueId, loadFixtureList]);
 
   /** Warm day/country caches after first paint (never compete with initial load). */
   useEffect(() => {
     if (!fixtureMeta?.days?.length) return;
-    const delay = ssrBundleReady ? 800 : 400;
+    const delay = ssrBundleReady ? 12_000 : 1500;
     const timer = window.setTimeout(() => {
       const dayIds = fixtureMeta.days.map((d) => d.id);
       prefetchHomeDayFeeds(dayIds, HOME_INITIAL_VISIBLE, (day) =>
@@ -1183,12 +1196,13 @@ export default function HomePageClient({
     setSelectedCountry('All countries');
     setVisibleLimit(HOME_INITIAL_VISIBLE);
     setSelectedDay(dayId);
+    setListFetchSettled(true);
+
     const cached = peekHomeFeedCache(filterCacheKey(dayId, 'All countries', null));
     if (cached?.fixtures.length) {
       setUpcomingFixtures(cached.fixtures);
       setOddsMap((prev) => ({ ...prev, ...cached.odds }));
       if (cached.meta) setFixtureMeta(cached.meta);
-      setListFetchSettled(true);
     } else if (dayId === 'all') {
       const allCached = peekHomeFeedCache(filterCacheKey('all', 'All countries', null));
       if (allCached?.fixtures.length) {
@@ -1201,23 +1215,19 @@ export default function HomePageClient({
     }
   }, [loadFixtureList]);
 
-  const selectCountry = useCallback(
-    (name: string) => {
-      setOpenSheet(null);
-      setSelectedLeagueId(null);
-      setSelectedLeagueName(null);
-      setVisibleLimit(HOME_INITIAL_VISIBLE);
-      setSelectedCountry(name);
-      const cached = peekHomeFeedCache(filterCacheKey(selectedDay, name, null));
-      if (cached?.fixtures.length) {
-        setUpcomingFixtures(cached.fixtures);
-        setOddsMap((prev) => ({ ...prev, ...cached.odds }));
-        if (cached.meta) setFixtureMeta(cached.meta);
-        setListFetchSettled(true);
-      }
-    },
-    [selectedDay]
-  );
+  const selectCountry = useCallback((name: string) => {
+    setOpenSheet(null);
+    setVisibleLimit(HOME_INITIAL_VISIBLE);
+    setSelectedCountry(name);
+    setListFetchSettled(true);
+
+    const cached = peekHomeFeedCache(filterCacheKey(selectedDay, name, null));
+    if (cached?.fixtures.length) {
+      setUpcomingFixtures(cached.fixtures);
+      setOddsMap((prev) => ({ ...prev, ...cached.odds }));
+      if (cached.meta) setFixtureMeta(cached.meta);
+    }
+  }, [selectedDay]);
 
   return (
     <div className="site-shell overflow-x-hidden bg-[#0D1117] min-h-screen text-white pb-[70px]">
@@ -1527,12 +1537,7 @@ export default function HomePageClient({
               </button>
               <div ref={carouselRef} className="flex overflow-x-auto hide-scrollbar gap-3 pb-2 -mx-3 px-3">
               {featuredForCarousel.map(({ fixture, odds }) => (
-                <Link
-                  key={fixture.id}
-                  href={`/matches/${fixture.id}`}
-                  onClick={() => stashMatchForDetail(fixture, odds)}
-                  className="site-card rounded-xl p-3.5 min-w-[280px] shrink-0 flex flex-col gap-3"
-                >
+                <Link key={fixture.id} href={`/matches/${fixture.id}`} className="site-card rounded-xl p-3.5 min-w-[280px] shrink-0 flex flex-col gap-3">
                   <div className="flex justify-between items-center">
                     <span
                       className="text-[10px] text-[#FF8C00] font-bold bg-[rgba(255,140,0,0.12)] px-2 py-1 rounded"
@@ -1713,14 +1718,7 @@ export default function HomePageClient({
                         const shouldShowScore = isLive || isLiveStatus || isFinished;
 
                         return (
-                          <Link
-                            key={fixture.id}
-                            href={`/matches/${fixture.id}`}
-                            onClick={() =>
-                              stashMatchForDetail(fixture, oddsMap[fixture.id] ?? [])
-                            }
-                            className="block p-3 bg-[#E8EDF5] hover:bg-[#DDE4EE] transition-colors rounded-[5px]"
-                          >
+                          <Link key={fixture.id} href={`/matches/${fixture.id}`} className="block p-3 bg-[#E8EDF5] hover:bg-[#DDE4EE] transition-colors rounded-[5px]">
                             <div className="flex gap-3 mb-2.5">
                                <div className="flex flex-col items-center justify-center w-[52px] min-w-[52px] h-[48px] bg-white rounded-lg shadow-sm border border-[#E2E8F0]">
                                  {renderStatus()}
