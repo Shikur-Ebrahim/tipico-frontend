@@ -1,7 +1,7 @@
 import HomePageClient from '../components/home-page-client';
 import { getCachedHomeBundle } from '../lib/cached-home-bundle';
 
-export const revalidate = 30;
+export const revalidate = 60;
 
 export default async function Home() {
   const { fixtures, odds, meta, topLeagues } = await getCachedHomeBundle();

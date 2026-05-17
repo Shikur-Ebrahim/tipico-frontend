@@ -44,7 +44,7 @@ export async function fetchServerHomeBundle(): Promise<ServerHomeBundle> {
     const bootstrapRes = await fetchWithTimeout(`${base}/fixtures/bootstrap?limit=${limit}`, {
       headers: { 'Content-Type': 'application/json' },
       next: { revalidate: 60 },
-      timeoutMs: 12_000,
+      timeoutMs: 6_000,
     });
 
     if (bootstrapRes.ok) {

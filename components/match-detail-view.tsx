@@ -125,9 +125,9 @@ export default function MatchDetailView({ initialFixture, initialOdds }: Props) 
           api.getFixture(id),
           api.getOdds(id, { refresh: true }),
         ]);
-        if (!cancelled) {
+        if (!cancelled && nextFixture) {
           setFixture(nextFixture);
-          setOdds(nextOdds);
+          setOdds(Array.isArray(nextOdds) ? nextOdds : []);
           nextDelay = computePollDelayMs(nextFixture);
         }
       } catch {

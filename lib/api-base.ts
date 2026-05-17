@@ -20,6 +20,15 @@ export function resolveApiUrl(path: string): string {
       const qs = normalized.includes('?') ? normalized.slice(normalized.indexOf('?')) : '';
       return `/api/fixtures-meta-summary${qs}`;
     }
+    const fixtureDetail = normalized.match(/^\/fixtures\/(\d+)$/);
+    if (fixtureDetail) {
+      return `/api/fixtures/${fixtureDetail[1]}`;
+    }
+    const oddsFixture = normalized.match(/^\/odds\/fixture\/(\d+)/);
+    if (oddsFixture) {
+      const qs = normalized.includes('?') ? normalized.slice(normalized.indexOf('?')) : '';
+      return `/api/odds/fixture/${oddsFixture[1]}${qs}`;
+    }
     if (normalized.startsWith('/fixtures/meta')) {
       const qs = normalized.includes('?') ? normalized.slice(normalized.indexOf('?')) : '';
       return `/api/fixtures-meta${qs}`;

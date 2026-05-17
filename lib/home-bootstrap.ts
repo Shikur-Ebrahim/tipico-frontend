@@ -42,7 +42,7 @@ export function seedHomeBootstrapFromServer(snap: HomeBootstrapSnapshot): void {
   memorySnapshot = snap;
   writeHomeFeedCache(DEFAULT_KEY, snap.fixtures, snap.odds, snap.meta);
   prefetchPromise = Promise.resolve(snap);
-  scheduleWarmCaches(snap.meta);
+  window.setTimeout(() => scheduleWarmCaches(snap.meta), 12_000);
 }
 
 export function hasSeededHomeBootstrap(): boolean {

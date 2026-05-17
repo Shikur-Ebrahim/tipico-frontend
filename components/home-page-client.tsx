@@ -211,9 +211,7 @@ export default function HomePageClient({
     return {};
   });
   const [listFetchSettled, setListFetchSettled] = useState(
-    () =>
-      initialUpcomingFixtures.length > 0 &&
-      Boolean(initialFixtureMeta?.days?.length)
+    () => initialUpcomingFixtures.length > 0
   );
   const ssrBundleReady =
     initialUpcomingFixtures.length > 0 && Boolean(initialFixtureMeta?.days?.length);
@@ -578,7 +576,7 @@ export default function HomePageClient({
 
     const loadOdds = async () => {
       setIsLoadingVisibleOdds(true);
-      const CHUNK = 120;
+      const CHUNK = 80;
       try {
         for (let i = 0; i < needIds.length; i += CHUNK) {
           if (cancelled) return;
@@ -601,11 +599,25 @@ export default function HomePageClient({
       }
     };
 
-    void loadOdds();
+    const startDelay = ssrBundleReady ? 2500 : 0;
+    const start = () => {
+      if (!cancelled) void loadOdds();
+    };
+    let idleId: number | undefined;
+    let timerId: ReturnType<typeof setTimeout> | undefined;
+    if (typeof requestIdleCallback !== 'undefined') {
+      idleId = requestIdleCallback(start, { timeout: startDelay + 1500 });
+    } else {
+      timerId = setTimeout(start, startDelay);
+    }
     return () => {
       cancelled = true;
+      if (idleId != null && typeof cancelIdleCallback !== 'undefined') {
+        cancelIdleCallback(idleId);
+      }
+      if (timerId) clearTimeout(timerId);
     };
-  }, [oddsTargetIds]);
+  }, [oddsTargetIds, ssrBundleReady]);
 
   const applyFeedToState = useCallback(
     (fixtures: Fixture[], odds: Record<number, Odd[]>, replace = true) => {
@@ -717,15 +729,7 @@ export default function HomePageClient({
         initialFixtureMeta
       );
       setListFetchSettled(true);
-      const deferRefresh = () => {
-        if (hasSeededHomeBootstrap()) void loadFixtureList({ background: true });
-      };
-      if (typeof requestIdleCallback !== 'undefined') {
-        const id = requestIdleCallback(deferRefresh, { timeout: 8000 });
-        return () => cancelIdleCallback(id);
-      }
-      const t = window.setTimeout(deferRefresh, 5000);
-      return () => window.clearTimeout(t);
+      return;
     }
 
     startHomeFeedPrefetch();
@@ -803,42 +807,44 @@ export default function HomePageClient({
     void loadFixtureList({ background: true });
   }, [selectedDay, selectedCountry, selectedLeagueId, loadFixtureList]);
 
-  /** Warm day dropdown options so switching days feels instant. */
+  /** Warm day/country caches after first paint (never compete with initial load). */
   useEffect(() => {
     if (!fixtureMeta?.days?.length) return;
-    const dayIds = fixtureMeta.days.map((d) => d.id);
-    prefetchHomeDayFeeds(dayIds, HOME_INITIAL_VISIBLE, (day) =>
-      api.getHomeFeed({ limit: HOME_INITIAL_VISIBLE, day })
-    );
-  }, [fixtureMeta?.days]);
-
-  /** Warm country dropdown / sidebar so country clicks show matches immediately. */
-  useEffect(() => {
-    if (!fixtureMeta?.countries?.length) return;
-    const topCountries = fixtureMeta.countries
-      .filter((c) => c.name !== 'All countries' && (c.count ?? 0) > 0)
-      .sort((a, b) => b.count - a.count)
-      .slice(0, PREFETCH_TOP_COUNTRIES)
-      .map((c) => c.name);
-    if (!topCountries.length) return;
-    prefetchHomeCountryFeeds('all', topCountries, HOME_INITIAL_VISIBLE, (params) =>
-      api.getHomeFeed({ limit: HOME_INITIAL_VISIBLE, ...params })
-    );
-    if (selectedDay !== 'all') {
-      prefetchHomeCountryFeeds(selectedDay, topCountries, HOME_INITIAL_VISIBLE, (params) =>
-        api.getHomeFeed({ limit: HOME_INITIAL_VISIBLE, ...params })
+    const delay = ssrBundleReady ? 12_000 : 1500;
+    const timer = window.setTimeout(() => {
+      const dayIds = fixtureMeta.days.map((d) => d.id);
+      prefetchHomeDayFeeds(dayIds, HOME_INITIAL_VISIBLE, (day) =>
+        api.getHomeFeed({ limit: HOME_INITIAL_VISIBLE, day })
       );
-    }
-  }, [fixtureMeta?.countries, selectedDay]);
+      const topCountries = fixtureMeta.countries
+        .filter((c) => c.name !== 'All countries' && (c.count ?? 0) > 0)
+        .sort((a, b) => b.count - a.count)
+        .slice(0, PREFETCH_TOP_COUNTRIES)
+        .map((c) => c.name);
+      if (topCountries.length) {
+        prefetchHomeCountryFeeds('all', topCountries, HOME_INITIAL_VISIBLE, (params) =>
+          api.getHomeFeed({ limit: HOME_INITIAL_VISIBLE, ...params })
+        );
+        if (selectedDay !== 'all') {
+          prefetchHomeCountryFeeds(selectedDay, topCountries, HOME_INITIAL_VISIBLE, (params) =>
+            api.getHomeFeed({ limit: HOME_INITIAL_VISIBLE, ...params })
+          );
+        }
+      }
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [fixtureMeta?.days, fixtureMeta?.countries, selectedDay, ssrBundleReady]);
 
-  /** After meta loads, prefetch full filter list in background (never before — avoids 5000-row timeout). */
+  /** After meta loads, prefetch full filter list in background (deferred so first paint stays instant). */
   useEffect(() => {
+    if (ssrBundleReady) return;
     if (showLiveOnly || deferredMainSearch.trim()) return;
     if (!fixtureMeta?.total || fixtureMeta.total <= HOME_INITIAL_VISIBLE) return;
     const target = apiFetchLimit;
     if (upcomingFixturesRef.current.length >= target) return;
     void loadFixtureList({ background: true });
   }, [
+    ssrBundleReady,
     fixtureMeta?.total,
     apiFetchLimit,
     showLiveOnly,

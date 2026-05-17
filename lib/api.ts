@@ -331,7 +331,13 @@ export const api = {
       return null;
     }
   },
-  getFixture: (id: number) => fetchAPI<Fixture>(`/fixtures/${id}`),
+  getFixture: async (id: number) => {
+    try {
+      return await fetchAPI<Fixture>(`/fixtures/${id}`, { timeoutMs: 12_000 });
+    } catch {
+      return null;
+    }
+  },
   getLiveFixtures: () => fetchAPI<Fixture[]>('/fixtures/live'),
 
   getLiveMatches: async () => {
@@ -348,9 +354,16 @@ export const api = {
   },
   getTeam: (id: number) => fetchAPI<Team>(`/teams/${id}`),
 
-  getOdds: (fixtureId: number, opts?: { refresh?: boolean }) => {
+  getOdds: async (fixtureId: number, opts?: { refresh?: boolean }) => {
     const bust = opts?.refresh ? `?_=${Date.now()}` : '';
-    return fetchAPI<Odd[]>(`/odds/fixture/${fixtureId}${bust}`);
+    try {
+      const rows = await fetchAPI<Odd[]>(`/odds/fixture/${fixtureId}${bust}`, {
+        timeoutMs: 12_000,
+      });
+      return Array.isArray(rows) ? rows : [];
+    } catch {
+      return [];
+    }
   },
 
   /** One request for up to 120 fixtures (server cap). */

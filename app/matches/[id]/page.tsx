@@ -1,54 +1,37 @@
-import Link from 'next/link';
-import { notFound } from 'next/navigation';
 import { api, Fixture, Odd } from '../../../lib/api';
-import MatchDetailView from '../../../components/match-detail-view';
+import MatchDetailPageClient from '../../../components/match-detail-page-client';
 
 export const dynamic = 'force-dynamic';
 
-type MatchDetailData = {
-  fixture: Fixture | null;
-  odds: Odd[];
-};
-
-async function safeLoad<T>(loader: () => Promise<T>, fallback: T) {
+async function tryLoadMatch(id: number): Promise<{ fixture: Fixture | null; odds: Odd[] }> {
   try {
-    return await loader();
+    const fixture = await api.getFixture(id);
+    if (!fixture) return { fixture: null, odds: [] };
+    const odds = await api.getOdds(fixture.id).catch(() => [] as Odd[]);
+    return { fixture, odds: Array.isArray(odds) ? odds : [] };
   } catch {
-    return fallback;
+    return { fixture: null, odds: [] };
   }
-}
-
-async function loadMatchDetail(id: number): Promise<MatchDetailData> {
-  const fixture = await safeLoad(() => api.getFixture(id), null as Fixture | null);
-
-  if (!fixture) {
-    return {
-      fixture: null,
-      odds: [],
-    };
-  }
-
-  const odds = await safeLoad(() => api.getOdds(fixture.id), [] as Odd[]);
-
-  return {
-    fixture,
-    odds,
-  };
 }
 
 export default async function MatchDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const matchId = Number(id);
 
-  if (Number.isNaN(matchId)) {
-    notFound();
+  let initialFixture: Fixture | null = null;
+  let initialOdds: Odd[] = [];
+
+  if (Number.isFinite(matchId) && matchId > 0) {
+    const loaded = await tryLoadMatch(matchId);
+    initialFixture = loaded.fixture;
+    initialOdds = loaded.odds;
   }
 
-  const { fixture, odds } = await loadMatchDetail(matchId);
-
-  if (!fixture) {
-    notFound();
-  }
-
-  return <MatchDetailView initialFixture={fixture} initialOdds={odds} />;
+  return (
+    <MatchDetailPageClient
+      matchId={Number.isFinite(matchId) ? matchId : NaN}
+      initialFixture={initialFixture}
+      initialOdds={initialOdds}
+    />
+  );
 }
