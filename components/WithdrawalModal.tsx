@@ -7,9 +7,11 @@ import { TIPICO_WALLET_UPDATED_EVENT, broadcastWalletSyncAcrossTabs } from '../l
 import { getPublicApiBaseUrl } from '@/lib/public-api-url';
 import WithdrawalDepositRuleBanner from './WithdrawalDepositRuleBanner';
 import WithdrawalAgentCodeHint from './WithdrawalAgentCodeHint';
+import WithdrawalDailyLimitBanner from './WithdrawalDailyLimitBanner';
 
 const API_BASE = getPublicApiBaseUrl();
 const MIN_WITHDRAW = 100;
+const MAX_DAILY_WITHDRAW = 100_000;
 
 type WithdrawalMethod = {
   id: number;
@@ -69,6 +71,8 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
   const [eligibilityLoaded, setEligibilityLoaded] = useState(false);
   const [totalDeposits, setTotalDeposits] = useState(0);
   const [minDepositRequired, setMinDepositRequired] = useState(6665);
+  const [withdrawnToday, setWithdrawnToday] = useState(0);
+  const [remainingToday, setRemainingToday] = useState(MAX_DAILY_WITHDRAW);
   const methodsRef = useRef<WithdrawalMethod[]>([]);
   const fetchGenRef = useRef(0);
   const userStateGenRef = useRef(0);
@@ -122,6 +126,10 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
       const mr = Number((eligData as { minRequired?: number }).minRequired);
       setTotalDeposits(Number.isFinite(td) ? td : 0);
       setMinDepositRequired(Number.isFinite(mr) ? mr : 6665);
+      const wt = Number((eligData as { withdrawnToday?: number }).withdrawnToday);
+      const rt = Number((eligData as { remainingToday?: number }).remainingToday);
+      setWithdrawnToday(Number.isFinite(wt) ? wt : 0);
+      setRemainingToday(Number.isFinite(rt) ? rt : MAX_DAILY_WITHDRAW);
       const req = pendData?.request as { amount?: string | number; method_name?: string } | null;
       if (pending && req) {
         setPendingSummary(`${req.amount} ETB · ${req.method_name || 'Withdrawal'} — processing`);
@@ -167,18 +175,34 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
     void loadUserWithdrawalState();
   }, [isOpen, user?.id, fetchMethods, loadUserWithdrawalState]);
 
+  const validateWithdrawalAmount = (val: number): string | null => {
+    if (!Number.isFinite(val) || val < MIN_WITHDRAW) {
+      return `Enter at least ${MIN_WITHDRAW} ETB`;
+    }
+    if (val > MAX_DAILY_WITHDRAW) {
+      return `Maximum withdrawal per request is ${MAX_DAILY_WITHDRAW.toLocaleString()} ETB`;
+    }
+    if (eligibilityLoaded && val > remainingToday) {
+      if (remainingToday <= 0) {
+        return `Daily withdrawal limit reached (${MAX_DAILY_WITHDRAW.toLocaleString()} ETB per day)`;
+      }
+      return `You can withdraw up to ${remainingToday.toLocaleString()} ETB more today`;
+    }
+    if (val > (user?.balance || 0)) {
+      return 'Insufficient balance';
+    }
+    return null;
+  };
+
   const handleMethodSelect = (method: WithdrawalMethod) => {
     if (eligibilityLoaded && !depositEligible) {
       setError(null);
       return;
     }
     const val = parseFloat(amount);
-    if (!Number.isFinite(val) || val < MIN_WITHDRAW) {
-      setError(`Enter at least ${MIN_WITHDRAW} ETB`);
-      return;
-    }
-    if (val > (user?.balance || 0)) {
-      setError('Insufficient balance');
+    const amountError = validateWithdrawalAmount(val);
+    if (amountError) {
+      setError(amountError);
       return;
     }
     setSelectedMethod(method);
@@ -200,6 +224,13 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
     }
     if (!accountName?.trim() || !accountDetails?.trim()) {
       setError('Please fill all details');
+      return;
+    }
+
+    const submitAmount = parseFloat(amount);
+    const amountError = validateWithdrawalAmount(submitAmount);
+    if (amountError) {
+      setError(amountError);
       return;
     }
 
@@ -241,11 +272,24 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
         setPendingSummary(`${amount} ETB · ${selectedMethod?.name || 'Withdrawal'} — processing`);
         void loadUserWithdrawalState();
       } else {
-        const data = await response.json().catch(() => ({})) as { message?: string; code?: string };
+        const data = await response.json().catch(() => ({})) as {
+          message?: string;
+          code?: string;
+          withdrawnToday?: number;
+          remainingToday?: number;
+        };
         const msg =
           data.code === 'PROMO_CODE_INVALID'
             ? 'Please enter correct agent ID code'
-            : data.message || 'Failed to process withdrawal';
+            : data.code === 'DAILY_WITHDRAWAL_LIMIT'
+              ? data.message || `Daily withdrawal limit is ${MAX_DAILY_WITHDRAW.toLocaleString()} ETB`
+              : data.message || 'Failed to process withdrawal';
+        if (data.code === 'DAILY_WITHDRAWAL_LIMIT') {
+          const wt = Number(data.withdrawnToday);
+          const rt = Number(data.remainingToday);
+          if (Number.isFinite(wt)) setWithdrawnToday(wt);
+          if (Number.isFinite(rt)) setRemainingToday(rt);
+        }
         setError(msg);
         setPromoPromptVisible(true);
       }
@@ -329,8 +373,19 @@ export default function WithdrawalModal({ isOpen, onClose, user }: WithdrawalMod
                   </div>
                   <div className="flex items-center justify-between px-1">
                     <span className="text-[10px] font-bold italic text-gray-400">Minimum {MIN_WITHDRAW} ETB</span>
+                    <span className="text-[10px] font-bold italic text-gray-400">
+                      Max {MAX_DAILY_WITHDRAW.toLocaleString()} ETB / day
+                    </span>
                   </div>
                 </div>
+
+                {eligibilityLoaded && depositEligible && (
+                  <WithdrawalDailyLimitBanner
+                    maxDaily={MAX_DAILY_WITHDRAW}
+                    withdrawnToday={withdrawnToday}
+                    remainingToday={remainingToday}
+                  />
+                )}
 
                 <div className="space-y-3">
                   <label className="ml-1 text-[11px] font-black text-gray-400">Payout method</label>
