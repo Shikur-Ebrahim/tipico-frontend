@@ -27,7 +27,11 @@ type DepositRequestsProps = {
 export default function DepositRequests({ onClose, initialTickets = null }: DepositRequestsProps) {
   const [tickets, setTickets] = useState<DepositTicket[]>(() => (Array.isArray(initialTickets) ? initialTickets : []));
   const [processingId, setProcessingId] = useState<number | null>(null);
-  const [confirming, setConfirming] = useState<{ id: number; type: 'approve' | 'reject' } | null>(null);
+  const [confirming, setConfirming] = useState<{
+    id: number;
+    type: 'approve' | 'reject' | 'deleteVerified';
+    amount?: number;
+  } | null>(null);
   const ticketsRef = useRef<DepositTicket[]>([]);
   const fetchGenRef = useRef(0);
   ticketsRef.current = tickets;
@@ -78,7 +82,7 @@ export default function DepositRequests({ onClose, initialTickets = null }: Depo
         type === 'approve'
           ? `${API_BASE}/admin/deposit-requests/${id}/approve`
           : `${API_BASE}/admin/deposit-requests/${id}`;
-      
+
       const response = await fetch(url, {
         method: type === 'approve' ? 'POST' : 'DELETE',
         headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
@@ -89,10 +93,13 @@ export default function DepositRequests({ onClose, initialTickets = null }: Depo
           broadcastWalletSyncAcrossTabs();
           setTickets((prev) => prev.map((t) => (t.id === id ? { ...t, status: 'approved' as const } : t)));
         } else {
+          if (type === 'deleteVerified') broadcastWalletSyncAcrossTabs();
           setTickets((prev) => prev.filter((t) => t.id !== id));
         }
       } else {
-        alert(`Failed to ${type} deposit`);
+        const data = await response.json().catch(() => ({}));
+        const msg = (data as { message?: string }).message;
+        alert(msg || `Failed to ${type} deposit`);
       }
     } catch (error) {
       console.error(`${type} error:`, error);
@@ -160,7 +167,7 @@ export default function DepositRequests({ onClose, initialTickets = null }: Depo
                 />
               </div>
 
-              {t.status === 'pending' && (
+              {t.status === 'pending' ? (
                 <div className="flex gap-3">
                   <button 
                     onClick={() => setConfirming({ id: t.id, type: 'reject' })}
@@ -177,6 +184,15 @@ export default function DepositRequests({ onClose, initialTickets = null }: Depo
                     {processingId === t.id ? 'Processing...' : 'Approve ticket'}
                   </button>
                 </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirming({ id: t.id, type: 'deleteVerified', amount: t.amount })}
+                  disabled={processingId === t.id}
+                  className="w-full py-4 bg-red-50 text-red-600 rounded-2xl font-black text-[11px] active:scale-95 transition-all border border-red-100"
+                >
+                  {processingId === t.id ? 'Processing...' : 'Delete verified deposit'}
+                </button>
               )}
             </div>
           ))
@@ -197,11 +213,19 @@ export default function DepositRequests({ onClose, initialTickets = null }: Depo
             </div>
             
             <div className="space-y-2">
-              <div className="text-xl font-black text-gray-900 tracking-tight">Confirm {confirming.type === 'approve' ? 'approval' : 'rejection'}</div>
+              <div className="text-xl font-black text-gray-900 tracking-tight">
+                {confirming.type === 'approve'
+                  ? 'Confirm approval'
+                  : confirming.type === 'deleteVerified'
+                    ? 'Delete verified deposit'
+                    : 'Confirm rejection'}
+              </div>
               <p className="text-xs font-medium text-gray-500 leading-relaxed">
-                {confirming.type === 'approve' 
-                  ? 'This will add the balance to the user account immediately.' 
-                  : 'This request will be permanently deleted from the system.'}
+                {confirming.type === 'approve'
+                  ? 'This will add the balance to the user account immediately.'
+                  : confirming.type === 'deleteVerified'
+                    ? `This will permanently remove the deposit and deduct ${confirming.amount ?? ''} ETB from the user's wallet.`
+                    : 'This request will be permanently deleted from the system.'}
               </p>
             </div>
 
@@ -210,7 +234,11 @@ export default function DepositRequests({ onClose, initialTickets = null }: Depo
                 onClick={handleAction}
                 className={`w-full py-4 rounded-2xl font-black text-xs transition-all active:scale-95 text-white ${confirming.type === 'approve' ? 'bg-green-500 shadow-green-100' : 'bg-red-500 shadow-red-100'} shadow-lg`}
               >
-                Yes, {confirming.type === 'approve' ? 'approve' : 'reject'}
+                {confirming.type === 'approve'
+                  ? 'Yes, approve'
+                  : confirming.type === 'deleteVerified'
+                    ? 'Yes, delete'
+                    : 'Yes, reject'}
               </button>
               <button 
                 onClick={() => setConfirming(null)}
