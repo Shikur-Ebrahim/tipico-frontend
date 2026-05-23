@@ -24,22 +24,29 @@ export default function AdminUsersManagement({ onClose }: AdminUsersManagementPr
   const [users, setUsers] = useState<AdminUserRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [savingBalanceId, setSavingBalanceId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [searchPhone, setSearchPhone] = useState('');
+  const [editingUserId, setEditingUserId] = useState<number | null>(null);
+  const [editBalance, setEditBalance] = useState('');
   const usersRef = useRef<AdminUserRow[]>([]);
   const fetchGenRef = useRef(0);
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   usersRef.current = users;
 
-  const fetchUsers = useCallback(async () => {
+  const fetchUsers = useCallback(async (search?: string) => {
     setError(null);
     const gen = ++fetchGenRef.current;
-    const block = usersRef.current.length === 0;
+    const block = usersRef.current.length === 0 && !search;
     if (block) setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/admin/users`, {
+      const term = (search ?? searchPhone).trim();
+      const qs = term ? `?q=${encodeURIComponent(term)}` : '';
+      const res = await fetch(`${API_BASE}/admin/users${qs}`, {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
       });
       const data = await res.json();
@@ -57,11 +64,21 @@ export default function AdminUsersManagement({ onClose }: AdminUsersManagementPr
     } finally {
       if (fetchGenRef.current === gen) setLoading(false);
     }
-  }, []);
+  }, [searchPhone]);
+
+  const isFirstSearchEffect = useRef(true);
 
   useEffect(() => {
-    void fetchUsers();
-  }, [fetchUsers]);
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    const delay = isFirstSearchEffect.current ? 0 : 350;
+    isFirstSearchEffect.current = false;
+    searchDebounceRef.current = setTimeout(() => {
+      void fetchUsers(searchPhone);
+    }, delay);
+    return () => {
+      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    };
+  }, [searchPhone, fetchUsers]);
 
   useEffect(() => {
     if (!success) return;
@@ -104,7 +121,7 @@ export default function AdminUsersManagement({ onClose }: AdminUsersManagementPr
       setPassword('');
       setConfirmPassword('');
       setAddFormOpen(false);
-      void fetchUsers();
+      void fetchUsers(searchPhone);
     } catch {
       setError('Connection error');
     } finally {
@@ -112,14 +129,69 @@ export default function AdminUsersManagement({ onClose }: AdminUsersManagementPr
     }
   };
 
-  const showBlockingLoader = loading && users.length === 0;
+  const startEditBalance = (u: AdminUserRow) => {
+    setEditingUserId(u.id);
+    setEditBalance(Number(u.balance ?? 0).toFixed(2));
+    setError(null);
+  };
+
+  const cancelEditBalance = () => {
+    setEditingUserId(null);
+    setEditBalance('');
+  };
+
+  const saveBalance = async (userId: number) => {
+    const balance = parseFloat(editBalance);
+    if (!Number.isFinite(balance) || balance < 0) {
+      setError('Enter a valid balance (0 or more)');
+      return;
+    }
+    setSavingBalanceId(userId);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/admin/users/${userId}/balance`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${localStorage.getItem('token')}`,
+        },
+        body: JSON.stringify({ balance }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError((data as { message?: string }).message || 'Could not update balance');
+        return;
+      }
+      setSuccess('Balance updated');
+      setEditingUserId(null);
+      setEditBalance('');
+      setUsers((prev) =>
+        prev.map((u) =>
+          u.id === userId
+            ? {
+                ...u,
+                balance: String((data as { balance?: string }).balance ?? balance.toFixed(2)),
+              }
+            : u
+        )
+      );
+    } catch {
+      setError('Connection error');
+    } finally {
+      setSavingBalanceId(null);
+    }
+  };
+
+  const showBlockingLoader = loading && users.length === 0 && !searchPhone.trim();
 
   return (
     <div className="fixed inset-0 z-[160] flex flex-col bg-[#F8FAFC] text-[#1A202C]">
       <header className="flex shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 py-4 sm:px-5">
         <div className="min-w-0 pr-2">
           <h1 className="text-lg font-bold leading-tight tracking-tight text-slate-900 sm:text-xl">Users</h1>
-          <p className="mt-0.5 text-[11px] font-medium text-slate-500 sm:text-xs">Browse accounts · use Add user to create one</p>
+          <p className="mt-0.5 text-[11px] font-medium text-slate-500 sm:text-xs">
+            Search by phone · view and edit wallet balance
+          </p>
         </div>
         <button
           type="button"
@@ -134,42 +206,84 @@ export default function AdminUsersManagement({ onClose }: AdminUsersManagementPr
       </header>
 
       <main className="mx-auto flex min-h-0 w-full max-w-md flex-1 flex-col overflow-y-auto overscroll-contain px-4 py-4 pb-28 sm:px-5">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 px-0.5">
-          <h2 className="text-sm font-bold text-slate-800 sm:text-base">All users ({users.length})</h2>
-          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => void fetchUsers()}
-              className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm transition active:scale-95 hover:bg-slate-50"
+        <div className="mb-3 space-y-3">
+          <label htmlFor="admin-user-search" className="sr-only">
+            Search by phone
+          </label>
+          <div className="relative">
+            <input
+              id="admin-user-search"
+              type="search"
+              inputMode="tel"
+              autoComplete="off"
+              placeholder="Search by phone number…"
+              value={searchPhone}
+              onChange={(e) => setSearchPhone(e.target.value)}
+              className="min-h-[48px] w-full rounded-2xl border border-slate-200 bg-white py-3 pl-11 pr-10 text-base text-slate-900 shadow-sm outline-none ring-0 transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200"
+            />
+            <svg
+              className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
             >
-              Refresh list
-            </button>
-            {!addFormOpen ? (
+              <circle cx="11" cy="11" r="8" />
+              <path d="m21 21-4.35-4.35" />
+            </svg>
+            {searchPhone.trim() ? (
               <button
                 type="button"
-                onClick={() => {
-                  setError(null);
-                  setAddFormOpen(true);
-                }}
-                className="rounded-full border-2 border-indigo-600 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-800 shadow-sm transition active:scale-95 hover:bg-indigo-100"
+                onClick={() => setSearchPhone('')}
+                className="absolute right-3 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100"
+                aria-label="Clear search"
               >
-                Add user
+                ×
               </button>
-            ) : (
+            ) : null}
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-2 px-0.5">
+            <h2 className="text-sm font-bold text-slate-800 sm:text-base">
+              {searchPhone.trim() ? `Results (${users.length})` : `All users (${users.length})`}
+            </h2>
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
               <button
                 type="button"
-                onClick={() => {
-                  setAddFormOpen(false);
-                  setPhone('');
-                  setPassword('');
-                  setConfirmPassword('');
-                  setError(null);
-                }}
-                className="rounded-full border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm transition active:scale-95 hover:bg-slate-50"
+                onClick={() => void fetchUsers(searchPhone)}
+                className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm transition active:scale-95 hover:bg-slate-50"
               >
-                Cancel add
+                Refresh
               </button>
-            )}
+              {!addFormOpen ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setError(null);
+                    setAddFormOpen(true);
+                  }}
+                  className="rounded-full border-2 border-indigo-600 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-800 shadow-sm transition active:scale-95 hover:bg-indigo-100"
+                >
+                  Add user
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAddFormOpen(false);
+                    setPhone('');
+                    setPassword('');
+                    setConfirmPassword('');
+                    setError(null);
+                  }}
+                  className="rounded-full border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm transition active:scale-95 hover:bg-slate-50"
+                >
+                  Cancel add
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
@@ -246,32 +360,92 @@ export default function AdminUsersManagement({ onClose }: AdminUsersManagementPr
           <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-center text-sm font-medium text-red-800">
             {error}
           </div>
+        ) : users.length === 0 ? (
+          <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">
+            {searchPhone.trim() ? 'No users match that phone number.' : 'No users yet.'}
+          </div>
         ) : (
           <ul className="flex flex-col gap-3 pb-8">
-            {users.map((u) => (
-              <li
-                key={u.id}
-                className="rounded-2xl border border-slate-200/90 bg-white p-4 shadow-sm ring-1 ring-black/[0.03]"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="break-all text-base font-semibold text-slate-900">{u.phone}</p>
-                    <p className="mt-1 text-xs font-medium capitalize text-slate-500">
-                      {u.role} · ID {u.id}
-                    </p>
-                    <p className="mt-1 text-[11px] text-slate-400">
-                      Joined {new Date(u.created_at).toLocaleDateString(undefined, { dateStyle: 'medium' })}
-                    </p>
+            {users.map((u) => {
+              const isEditing = editingUserId === u.id;
+              return (
+                <li
+                  key={u.id}
+                  className="rounded-2xl border border-slate-200/90 bg-white p-4 shadow-sm ring-1 ring-black/[0.03]"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="break-all text-base font-semibold text-slate-900">{u.phone}</p>
+                      <p className="mt-1 text-xs font-medium capitalize text-slate-500">
+                        {u.role} · ID {u.id}
+                      </p>
+                      <p className="mt-1 text-[11px] text-slate-400">
+                        Joined{' '}
+                        {new Date(u.created_at).toLocaleDateString(undefined, { dateStyle: 'medium' })}
+                      </p>
+                    </div>
+                    {!isEditing ? (
+                      <div className="shrink-0 rounded-xl bg-orange-50 px-3 py-2 text-right ring-1 ring-orange-100">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-orange-600/80">
+                          Balance
+                        </p>
+                        <p className="text-lg font-bold tabular-nums text-slate-900">
+                          {Number(u.balance ?? 0).toFixed(2)}
+                        </p>
+                        <p className="text-[10px] font-bold text-orange-600">{u.currency || 'ETB'}</p>
+                      </div>
+                    ) : null}
                   </div>
-                  <div className="shrink-0 text-right">
-                    <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Balance</p>
-                    <p className="text-sm font-bold tabular-nums text-slate-900">
-                      {Number(u.balance ?? 0).toFixed(2)} <span className="text-xs font-semibold text-orange-600">{u.currency || 'ETB'}</span>
-                    </p>
-                  </div>
-                </div>
-              </li>
-            ))}
+
+                  {isEditing ? (
+                    <div className="mt-4 space-y-2 border-t border-slate-100 pt-4">
+                      <label
+                        htmlFor={`balance-${u.id}`}
+                        className="block text-xs font-semibold text-slate-600"
+                      >
+                        New balance ({u.currency || 'ETB'})
+                      </label>
+                      <input
+                        id={`balance-${u.id}`}
+                        type="number"
+                        inputMode="decimal"
+                        min={0}
+                        step="0.01"
+                        value={editBalance}
+                        onChange={(e) => setEditBalance(e.target.value)}
+                        className="min-h-[48px] w-full rounded-xl border border-slate-200 bg-slate-50 px-4 text-base font-semibold tabular-nums text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200"
+                      />
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={cancelEditBalance}
+                          disabled={savingBalanceId === u.id}
+                          className="flex-1 rounded-xl border border-slate-200 py-3 text-xs font-bold text-slate-600"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void saveBalance(u.id)}
+                          disabled={savingBalanceId === u.id}
+                          className="flex-[2] rounded-xl bg-indigo-600 py-3 text-xs font-bold text-white disabled:opacity-50"
+                        >
+                          {savingBalanceId === u.id ? 'Saving…' : 'Save balance'}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => startEditBalance(u)}
+                      className="mt-3 w-full rounded-xl border border-indigo-200 bg-indigo-50 py-2.5 text-xs font-bold text-indigo-800 transition active:scale-[0.99] hover:bg-indigo-100"
+                    >
+                      Edit balance
+                    </button>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
 
