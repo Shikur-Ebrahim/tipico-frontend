@@ -1,4 +1,5 @@
 import { fetchWithTimeout } from './fetch-with-timeout';
+import { FIXTURE_LIST_LIMIT } from './api';
 import { HOME_INITIAL_VISIBLE } from './home-fixture-list';
 import { getPublicApiBaseUrl } from './public-api-url';
 import type { Fixture, FixtureDayCounts, FixtureMeta, League, Odd } from './api';
@@ -38,7 +39,7 @@ export async function fetchServerHomeBundle(): Promise<ServerHomeBundle> {
     return { fixtures: [], odds: {}, meta: null, topLeagues: [] };
   }
 
-  const limit = HOME_INITIAL_VISIBLE;
+  const limit = FIXTURE_LIST_LIMIT;
 
   try {
     const bootstrapRes = await fetchWithTimeout(`${base}/fixtures/bootstrap?limit=${limit}`, {

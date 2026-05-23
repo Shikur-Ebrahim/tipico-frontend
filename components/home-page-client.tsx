@@ -732,11 +732,13 @@ export default function HomePageClient({
     async (opts?: { background?: boolean }) => {
       const background = opts?.background === true;
       const gen = ++fixtureFetchGenRef.current;
+      const metaCap =
+        filteredTotalCount > 0 ? filteredTotalCount : fixtureMetaRef.current?.total ?? 0;
       const fetchLimit = showLiveOnly
         ? Math.min(400, Math.max(visibleLimit, apiFetchLimit))
         : Math.min(
             FIXTURE_LIST_LIMIT,
-            Math.max(HOME_INITIAL_VISIBLE, visibleLimit, apiFetchLimit)
+            Math.max(HOME_INITIAL_VISIBLE, visibleLimit, apiFetchLimit, metaCap || 0)
           );
       try {
         let feed = await api.getHomeFeed({
@@ -768,7 +770,16 @@ export default function HomePageClient({
         }
       }
     },
-    [apiFetchLimit, visibleLimit, showLiveOnly, selectedDay, selectedCountry, selectedLeagueId, applyFeedToState]
+    [
+      apiFetchLimit,
+      visibleLimit,
+      showLiveOnly,
+      selectedDay,
+      selectedCountry,
+      selectedLeagueId,
+      applyFeedToState,
+      filteredTotalCount,
+    ]
   );
 
   const hydrateFromCache = useCallback(
@@ -929,8 +940,8 @@ export default function HomePageClient({
   useEffect(() => {
     if (ssrBundleReady) return;
     if (showLiveOnly || deferredMainSearch.trim()) return;
-    if (!fixtureMeta?.total || fixtureMeta.total <= HOME_INITIAL_VISIBLE) return;
-    const target = apiFetchLimit;
+    if (!fixtureMeta?.total) return;
+    const target = Math.min(FIXTURE_LIST_LIMIT, fixtureMeta.total);
     if (upcomingFixturesRef.current.length >= target) return;
     void loadFixtureList({ background: true });
   }, [
