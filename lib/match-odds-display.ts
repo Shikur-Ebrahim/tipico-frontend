@@ -32,26 +32,54 @@ function sortMatchWinnerSelections(odds: Odd[]): Odd[] {
   });
 }
 
-function getDisplayOdds(odds: Odd[]) {
+function pricedOdds(odds: Odd[]): Odd[] {
+  return odds.filter((o) => {
+    const v = Number(o.odd_value);
+    return Number.isFinite(v) && v > 0;
+  });
+}
+
+function dedupeBySelection(odds: Odd[]): Odd[] {
   const selections = new Map<string, Odd>();
   for (const odd of odds) {
-    const v = Number(odd.odd_value);
-    if (!Number.isFinite(v) || v <= 0) continue;
     if (!selections.has(odd.selection)) {
       selections.set(odd.selection, odd);
     }
   }
-  return sortMatchWinnerSelections(Array.from(selections.values())).slice(0, 3);
+  return Array.from(selections.values());
 }
 
-/** 1X2 / match-winner lines only (no fallback to other markets). */
+function getDisplayOdds(odds: Odd[]) {
+  return sortMatchWinnerSelections(dedupeBySelection(odds)).slice(0, 3);
+}
+
+/** Prefer 1X2; otherwise first market with at least two priced selections. */
 export function getMatchWinnerDisplayOdds(odds: Odd[]) {
   if (!odds?.length) return [];
-  const mw = odds.filter(isMatchWinnerMarket);
-  return getDisplayOdds(mw);
+  const priced = pricedOdds(odds);
+  const mw = getDisplayOdds(priced.filter(isMatchWinnerMarket));
+  if (mw.length >= 2) return mw;
+
+  const byMarket = new Map<string, Odd[]>();
+  for (const o of priced) {
+    const key = (o.market_key || o.market_name || 'other').toLowerCase();
+    if (!byMarket.has(key)) byMarket.set(key, []);
+    byMarket.get(key)!.push(o);
+  }
+  let best: Odd[] = [];
+  for (const rows of byMarket.values()) {
+    const line = dedupeBySelection(rows).slice(0, 3);
+    if (line.length > best.length) best = line;
+  }
+  return best;
 }
 
-/** True when fixture has at least two priced 1X2 selections to show. */
+/** True when the UI can show at least two priced selections (any market). */
 export function hasMatchWinnerOdds(odds: Odd[] | undefined): boolean {
   return getMatchWinnerDisplayOdds(odds || []).length >= 2;
+}
+
+/** Any stored odds row with a valid price. */
+export function hasAnyStoredOdds(odds: Odd[] | undefined): boolean {
+  return pricedOdds(odds || []).length > 0;
 }
