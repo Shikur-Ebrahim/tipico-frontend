@@ -135,7 +135,7 @@ function getSelectionName(selection: string, fixture: Fixture) {
 }
 
 /** Live scores + odds — aligned with backend 30s sync. */
-const LIVE_POLL_INTERVAL_MS = 30_000;
+const LIVE_POLL_INTERVAL_MS = 45_000;
 const LIVE_SIDEBAR_STATUSES = ['1H', '2H', 'HT', 'ET', 'P', 'LIVE'];
 
 function liveMatchToFixture(m: LiveMatch): Fixture {
@@ -393,7 +393,7 @@ export default function HomePageClient({
   useEffect(() => {
     if (!user?.id || typeof window === 'undefined' || !localStorage.getItem('token')) return;
 
-    const POLL_MS = 10_000;
+    const POLL_MS = 30_000;
 
     const pollWallet = async () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
