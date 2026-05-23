@@ -9,6 +9,7 @@ import {
   prefetchDepositBootstrap,
   type DepositMethod,
 } from '@/lib/deposit-cache';
+import { getPublicApiBaseUrl } from '@/lib/public-api-url';
 
 type DepositModalProps = {
   isOpen: boolean;
@@ -99,7 +100,7 @@ export default function DepositModal({ isOpen, onClose, user }: DepositModalProp
 
   useEffect(() => {
     if (!isOpen || !user?.id) return;
-    void fetch('/api/deposit/warm', { cache: 'no-store' }).catch(() => undefined);
+    void fetch(`${getPublicApiBaseUrl()}/health`, { cache: 'no-store' }).catch(() => undefined);
     void refreshBootstrap({ silent: true });
   }, [isOpen, user?.id, refreshBootstrap]);
 
@@ -150,10 +151,11 @@ export default function DepositModal({ isOpen, onClose, user }: DepositModalProp
       const cloudData = await cloudRes.json();
       if (!cloudData.secure_url) throw new Error('Screenshot upload failed');
 
-      const response = await fetch('/api/deposit/request', {
+      const response = await fetch(`${getPublicApiBaseUrl()}/user/deposit-request`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          Accept: 'application/json',
           Authorization: `Bearer ${localStorage.getItem('token')}`,
         },
         body: JSON.stringify({

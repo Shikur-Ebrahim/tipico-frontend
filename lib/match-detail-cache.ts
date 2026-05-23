@@ -1,4 +1,5 @@
 import type { Fixture, Odd } from './api';
+import { getPublicApiBaseUrl } from './public-api-url';
 import { homeFeedCacheKey, peekHomeFeedCache } from './home-feed-cache';
 
 const STORAGE_PREFIX = 'tipico-match:';
@@ -141,7 +142,7 @@ export function prefetchMatchDetailOdds(fixtureId: number): void {
   if (cached && cached.odds.length > 8) return;
   if (prefetchInFlight.has(fixtureId)) return;
   prefetchInFlight.add(fixtureId);
-  void fetch(`/api/odds/fixture/${fixtureId}`, { credentials: 'same-origin' })
+  void fetch(`${getPublicApiBaseUrl()}/odds/fixture/${fixtureId}`, { credentials: 'omit' })
     .then((res) => (res.ok ? res.json() : []))
     .then((rows: Odd[]) => {
       if (Array.isArray(rows) && rows.length > 0) {

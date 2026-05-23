@@ -12,6 +12,7 @@ import {
   useState,
 } from 'react';
 import { api, FIXTURE_LIST_LIMIT, Fixture, FixtureMeta, League, LiveMatch, Odd } from '../lib/api';
+import { getPublicApiBaseUrl } from '../lib/public-api-url';
 import { getMatchWinnerDisplayOdds, hasMatchWinnerOdds } from '../lib/match-odds-display';
 import {
   groupFixturesByLeague,
@@ -448,7 +449,7 @@ export default function HomePageClient({
   const primeDeposit = () => {
     if (typeof window === 'undefined') return;
     if (user?.id && localStorage.getItem('token')) prefetchDepositBootstrap();
-    void fetch('/api/deposit/warm', { cache: 'no-store' }).catch(() => undefined);
+    void fetch(`${getPublicApiBaseUrl()}/health`, { cache: 'no-store' }).catch(() => undefined);
   };
 
   /** Open deposit if logged in; otherwise show login and reopen deposit after successful auth. */

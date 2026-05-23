@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react';
 
+import { getPublicApiBaseUrl } from '../lib/public-api-url';
+import { parseJsonResponse } from '../lib/safe-json';
 import { TIPICO_AUTH_SUCCESS_EVENT } from '../lib/ui-events';
 
 type AuthModalProps = {
@@ -20,7 +22,7 @@ export default function AuthModal({ isOpen, onClose, initialView, onSuccess }: A
 
   useEffect(() => {
     if (!isOpen) return;
-    void fetch('/api/auth/warm', { cache: 'no-store' }).catch(() => undefined);
+    void fetch(`${getPublicApiBaseUrl()}/health`, { cache: 'no-store' }).catch(() => undefined);
   }, [isOpen]);
 
   if (!isOpen) return null;
@@ -38,13 +40,13 @@ export default function AuthModal({ isOpen, onClose, initialView, onSuccess }: A
       const fullPhone = `+251${phoneNumber}`;
       const endpoint = view === 'login' ? 'login' : 'signup';
       
-      const response = await fetch(`/api/auth/${endpoint}`, {
+      const response = await fetch(`${getPublicApiBaseUrl()}/auth/${endpoint}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({ phone: fullPhone, password }),
       });
 
-      const data = await response.json();
+      const data = await parseJsonResponse<{ error?: string; token?: string; user?: unknown }>(response);
 
       if (!response.ok) {
         throw new Error(data.error || `Failed to ${view}`);

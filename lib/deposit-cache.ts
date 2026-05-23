@@ -7,6 +7,9 @@ export type DepositMethod = {
   account_name: string;
 };
 
+import { getPublicApiBaseUrl } from './public-api-url';
+import { parseJsonResponse } from './safe-json';
+
 export type DepositBootstrap = {
   hasPending: boolean;
   methods: DepositMethod[];
@@ -72,7 +75,7 @@ export async function fetchDepositBootstrap(): Promise<DepositBootstrap> {
   if (inflight) return inflight;
 
   inflight = (async () => {
-    const res = await fetch('/api/deposit/bootstrap', {
+    const res = await fetch(`${getPublicApiBaseUrl()}/user/deposit-bootstrap`, {
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: 'application/json',
@@ -80,7 +83,7 @@ export async function fetchDepositBootstrap(): Promise<DepositBootstrap> {
       cache: 'no-store',
     });
 
-    const data = (await res.json()) as DepositBootstrap & { message?: string; error?: string };
+    const data = await parseJsonResponse<DepositBootstrap & { message?: string; error?: string }>(res);
     if (!res.ok) {
       throw new Error(data.message || data.error || 'Failed to load deposit methods');
     }

@@ -11,7 +11,9 @@ Next.js app for the Tipico betting UI. All data comes from the **backend API on 
 
    | Name | Example |
    |------|---------|
-   | `NEXT_PUBLIC_API_URL` | `https://YOUR-BACKEND.onrender.com/api` |
+   | `NEXT_PUBLIC_API_URL` | `https://tipico-backend.onrender.com/api` (your Render service URL + `/api`) |
+
+   **Required.** The live site calls Render directly for login, matches, and bets. Wrong or missing value → login JSON errors and empty match list.
    | `NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME` | Your Cloudinary cloud name |
    | `NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET` | Unsigned upload preset (deposits / admin logos) |
 
